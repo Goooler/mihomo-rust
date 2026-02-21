@@ -52,7 +52,7 @@ impl DnsServer {
         }
     }
 
-    async fn handle_query(
+    pub async fn handle_query(
         data: &[u8],
         resolver: &Resolver,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
