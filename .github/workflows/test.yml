@@ -2,9 +2,9 @@ name: Test
 
 on:
   push:
-    paths: ["mihomo-rust/**"]
+    paths: ["crates/**", "tests/**", "Cargo.toml", "Cargo.lock"]
   pull_request:
-    paths: ["mihomo-rust/**"]
+    paths: ["crates/**", "tests/**", "Cargo.toml", "Cargo.lock"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -12,9 +12,6 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: mihomo-rust
     steps:
       - uses: actions/checkout@v4
 
@@ -22,7 +19,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: mihomo-rust
           cache-on-failure: true
 
       - name: Cache ssserver binary
@@ -30,7 +26,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/ssserver
-          key: ssserver-${{ runner.os }}-${{ hashFiles('mihomo-rust/Cargo.lock') }}
+          key: ssserver-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
 
       - name: Install ssserver
         if: steps.cache-ssserver.outputs.cache-hit != 'true'

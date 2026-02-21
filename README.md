@@ -1,115 +1,188 @@
-# mihomo
-A simple python pydantic model (type hint and autocompletion support) for Honkai: Star Rail parsed data from the Mihomo API.
+# mihomo-rust
 
-API url: https://api.mihomo.me/sr_info_parsed/{UID}?lang={LANG}
+A high-performance Rust implementation of the [mihomo](https://github.com/MetaCubeX/mihomo) (Clash Meta) proxy kernel. Rule-based tunneling with support for multiple proxy protocols, DNS with FakeIP, and a REST API for runtime control.
 
-## Installation
+## Features
+
+### Proxy Protocols
+- **Shadowsocks** — TCP and UDP relay, AEAD and stream ciphers (aes-256-gcm, chacha20-ietf-poly1305, etc.)
+- **Trojan** — TLS 1.2/1.3 via rustls, SNI, optional skip-cert-verify
+- **Direct** — Direct connection to destination
+- **Reject** — Drop connections (with configurable behavior)
+
+### Proxy Groups
+- **Selector** — Manual proxy selection via REST API
+- **URLTest** — Automatic selection based on latency with tolerance threshold
+- **Fallback** — Automatic failover to first alive proxy
+
+### Rule Engine
+| Rule | Example | Description |
+|------|---------|-------------|
+| DOMAIN | `DOMAIN,google.com,Proxy` | Exact domain match |
+| DOMAIN-SUFFIX | `DOMAIN-SUFFIX,google.com,Proxy` | Domain and subdomains |
+| DOMAIN-KEYWORD | `DOMAIN-KEYWORD,google,Proxy` | Substring match |
+| DOMAIN-REGEX | `DOMAIN-REGEX,^ads?\.,Proxy` | Regex pattern |
+| IP-CIDR | `IP-CIDR,10.0.0.0/8,DIRECT,no-resolve` | Destination IP range |
+| SRC-IP-CIDR | `SRC-IP-CIDR,192.168.0.0/16,DIRECT` | Source IP range |
+| DST-PORT | `DST-PORT,80,443,8080,Proxy` | Destination port(s) |
+| SRC-PORT | `SRC-PORT,1234,DIRECT` | Source port(s) |
+| NETWORK | `NETWORK,udp,Proxy` | TCP or UDP |
+| PROCESS-NAME | `PROCESS-NAME,curl,DIRECT` | Process name |
+| GEOIP | `GEOIP,CN,DIRECT,no-resolve` | MaxMind GeoIP lookup |
+| MATCH | `MATCH,Proxy` | Catch-all fallback |
+
+Logic composition rules (AND, OR, NOT) are also supported for combining conditions.
+
+### DNS
+- UDP DNS server with configurable listen address
+- Main + fallback nameserver groups
+- **FakeIP** mode for transparent proxying (configurable CIDR range)
+- Response caching and in-flight request deduplication
+
+### Inbound Listeners
+- **Mixed** — Auto-detects HTTP or SOCKS5 on a single port
+- **HTTP Proxy** — HTTP CONNECT and plain HTTP forwarding
+- **SOCKS5** — SOCKS5 with optional authentication
+
+### REST API
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/version` | GET | Version info |
+| `/proxies` | GET | List all proxies |
+| `/proxies/{name}` | GET/PUT | Get or switch proxy |
+| `/rules` | GET | List active rules |
+| `/connections` | GET | Active connections with traffic stats |
+| `/connections/{id}` | DELETE | Close a connection |
+| `/configs` | GET/PATCH | Get or update running config |
+| `/traffic` | GET | Upload/download statistics |
+| `/dns/query` | POST | Direct DNS query |
+
+### Tunnel
+- Three routing modes: **Rule**, **Global**, **Direct**
+- Bidirectional TCP relay and UDP NAT session tracking
+- Per-connection traffic statistics with connection lifecycle management
+
+## Architecture
+
 ```
-pip install -U git+https://github.com/KT-Yeh/mihomo.git
+Listeners (HTTP/SOCKS5/Mixed)
+        |
+        v
+    Tunnel (routing engine)  <-->  DNS Resolver (FakeIP/Normal)
+        |
+    Rule Matching Engine
+        |
+        v
+  Proxy Adapters / Groups  --->  Remote Server
+
+  REST API Server (Axum)   --->  Runtime control
+```
+
+10 workspace crates with clear separation of concerns:
+
+| Crate | Purpose |
+|-------|---------|
+| `mihomo-common` | Core traits and types (ProxyAdapter, Rule, Metadata) |
+| `mihomo-trie` | Domain trie for efficient pattern matching |
+| `mihomo-proxy` | Proxy protocol implementations and groups |
+| `mihomo-rules` | Rule matching engine and parser |
+| `mihomo-dns` | DNS resolver, FakeIP pool, cache, server |
+| `mihomo-tunnel` | Core routing, TCP/UDP relay, statistics |
+| `mihomo-listener` | Inbound protocol handlers |
+| `mihomo-config` | YAML configuration parsing |
+| `mihomo-api` | REST API (Axum) |
+| `mihomo-app` | CLI entry point |
+
+## Build
+
+Requires Rust 1.70+.
+
+```bash
+cargo build --release
 ```
 
 ## Usage
 
-### Basic
-There are two parsed data formats:
-- V1:
-  - URL: https://api.mihomo.me/sr_info_parsed/800333171?lang=en&version=v1
-  - Fetching: use `client.fetch_user_v1(800333171)`
-  - Data model: `mihomo.models.v1.StarrailInfoParsedV1`
-  - All models defined in `mihomo/models/v1` directory.
-- V2: 
-  - URL: https://api.mihomo.me/sr_info_parsed/800333171?lang=en
-  - Fetching: use `client.fetch_user(800333171)`
-  - Data model: `mihomo.models.StarrailInfoParsed`
-  - All models defined in `mihomo/models` directory.
+```bash
+# Run with config file
+./target/release/mihomo -f config.yaml
 
-If you don't want to use `client.get_icon_url` to get the image url everytime, you can use `client.fetch_user(800333171, replace_icon_name_with_url=True)` to get the parsed data with asset urls.
-
-### Example
-```py
-import asyncio
-
-from mihomo import Language, MihomoAPI
-from mihomo.models import StarrailInfoParsed
-from mihomo.models.v1 import StarrailInfoParsedV1
-
-client = MihomoAPI(language=Language.EN)
-
-
-async def v1():
-    data: StarrailInfoParsedV1 = await client.fetch_user_v1(800333171)
-
-    print(f"Name: {data.player.name}")
-    print(f"Level: {data.player.level}")
-    print(f"Signature: {data.player.signature}")
-    print(f"Achievements: {data.player_details.achievements}")
-    print(f"Characters count: {data.player_details.characters}")
-    print(f"Profile picture url: {client.get_icon_url(data.player.icon)}")
-    for character in data.characters:
-        print("-----------")
-        print(f"Name: {character.name}")
-        print(f"Rarity: {character.rarity}")
-        print(f"Level: {character.level}")
-        print(f"Avatar url: {client.get_icon_url(character.icon)}")
-        print(f"Preview url: {client.get_icon_url(character.preview)}")
-        print(f"Portrait url: {client.get_icon_url(character.portrait)}")
-
-
-async def v2():
-    data: StarrailInfoParsed = await client.fetch_user(800333171, replace_icon_name_with_url=True)
-
-    print(f"Name: {data.player.name}")
-    print(f"Level: {data.player.level}")
-    print(f"Signature: {data.player.signature}")
-    print(f"Profile picture url: {data.player.avatar.icon}")
-    for character in data.characters:
-        print("-----------")
-        print(f"Name: {character.name}")
-        print(f"Rarity: {character.rarity}")
-        print(f"Portrait url: {character.portrait}")
-
-asyncio.run(v1())
-asyncio.run(v2())
+# Test config validity
+./target/release/mihomo -f config.yaml -t
 ```
 
-### Tools
-`from mihomo import tools`
-#### Remove Duplicate Character
-```py
-    data = await client.fetch_user(800333171)
-    data = tools.remove_duplicate_character(data)
+### Example Configuration
+
+```yaml
+mixed-port: 7890
+mode: rule
+log-level: info
+
+external-controller: 127.0.0.1:9090
+
+dns:
+  enable: true
+  listen: 127.0.0.1:1053
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  nameserver:
+    - 8.8.8.8
+  fallback:
+    - 8.8.4.4
+
+proxies:
+  - name: my-ss
+    type: ss
+    server: 1.2.3.4
+    port: 8388
+    cipher: aes-256-gcm
+    password: "secret"
+    udp: true
+
+  - name: my-trojan
+    type: trojan
+    server: 5.6.7.8
+    port: 443
+    password: "secret"
+    sni: example.com
+    skip-cert-verify: false
+
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies: [my-ss, my-trojan]
+
+  - name: Auto
+    type: url-test
+    proxies: [my-ss, my-trojan]
+    url: http://www.gstatic.com/generate_204
+    interval: 300
+
+rules:
+  - DOMAIN-SUFFIX,local,DIRECT
+  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+  - DOMAIN-SUFFIX,google.com,Proxy
+  - MATCH,Proxy
 ```
 
-#### Merge Character Data
-```py
-    old_data = await client.fetch_user(800333171)
+## Testing
 
-    # Change characters in game and wait for the API to refresh
-    # ...
+```bash
+# Unit tests
+cargo test --lib
 
-    new_data = await client.fetch_user(800333171)
-    data = tools.merge_character_data(new_data, old_data)
+# Rules tests (78 tests covering all rule types)
+cargo test --test rules_test
+
+# Trojan integration tests (embedded mock server, no external deps)
+cargo test --test trojan_integration
+
+# Shadowsocks integration tests (requires ssserver)
+cargo install shadowsocks-rust --features "stream-cipher aead-cipher-2022" --locked
+cargo test --test shadowsocks_integration
 ```
 
-### Data Persistence
-Take pickle and json as an example
-```py
-import pickle
-import zlib
-from mihomo import MihomoAPI, Language, StarrailInfoParsed
+## License
 
-client = MihomoAPI(language=Language.EN)
-data = await client.fetch_user(800333171)
-
-# Save
-pickle_data = zlib.compress(pickle.dumps(data))
-print(len(pickle_data))
-json_data = data.json(by_alias=True, ensure_ascii=False)
-print(len(json_data))
-
-# Load
-data_from_pickle = pickle.loads(zlib.decompress(pickle_data))
-data_from_json = StarrailInfoParsed.parse_raw(json_data)
-print(type(data_from_pickle))
-print(type(data_from_json))
-```
+GPL-3.0
