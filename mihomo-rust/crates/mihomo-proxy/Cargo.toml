@@ -1,0 +1,32 @@
+[package]
+name = "mihomo-proxy"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mihomo-common = { workspace = true }
+tokio = { workspace = true }
+shadowsocks = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls = { workspace = true }
+webpki-roots = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+bytes = { workspace = true }
+reqwest = { workspace = true }
+parking_lot = { workspace = true }
+dashmap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+rcgen = "0.13"
+tokio-rustls = { workspace = true }
+rustls = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }

@@ -1,0 +1,16 @@
+[package]
+name = "mihomo-rules"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mihomo-common = { workspace = true }
+mihomo-trie = { workspace = true }
+maxminddb = { workspace = true }
+ipnet = { workspace = true }
+regex = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]

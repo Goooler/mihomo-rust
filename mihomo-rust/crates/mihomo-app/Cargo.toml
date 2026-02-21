@@ -1,0 +1,23 @@
+[package]
+name = "mihomo-app"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "mihomo"
+path = "src/main.rs"
+
+[dependencies]
+mihomo-common = { workspace = true }
+mihomo-config = { workspace = true }
+mihomo-tunnel = { workspace = true }
+mihomo-listener = { workspace = true }
+mihomo-dns = { workspace = true }
+mihomo-api = { workspace = true }
+mihomo-proxy = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde_yaml = { workspace = true }

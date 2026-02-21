@@ -1,0 +1,103 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mihomo-common",
+    "crates/mihomo-trie",
+    "crates/mihomo-dns",
+    "crates/mihomo-rules",
+    "crates/mihomo-proxy",
+    "crates/mihomo-tunnel",
+    "crates/mihomo-listener",
+    "crates/mihomo-api",
+    "crates/mihomo-config",
+    "crates/mihomo-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Networking
+shadowsocks = { version = "1.21", features = ["aead-cipher-2022", "stream-cipher"] }
+tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+webpki-roots = "0.26"
+
+# DNS
+hickory-resolver = "0.25"
+hickory-server = "0.25"
+hickory-proto = "0.25"
+
+# Web framework
+axum = { version = "0.8", features = ["ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors"] }
+
+# GeoIP
+maxminddb = "0.27"
+
+# Concurrency
+dashmap = "6"
+
+# Caching
+lru = "0.12"
+
+# IP handling
+ipnet = "2"
+
+# Crypto
+sha2 = "0.10"
+hex = "0.4"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Async traits
+async-trait = "0.1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# UUID
+uuid = { version = "1", features = ["v4"] }
+
+# Regex
+regex = "1"
+
+# Byte manipulation
+bytes = "1"
+
+# Futures
+futures = "0.3"
+
+# HTTP client
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
+# Parking lot for sync primitives
+parking_lot = "0.12"
+
+# Workspace crates
+mihomo-common = { path = "crates/mihomo-common" }
+mihomo-trie = { path = "crates/mihomo-trie" }
+mihomo-dns = { path = "crates/mihomo-dns" }
+mihomo-rules = { path = "crates/mihomo-rules" }
+mihomo-proxy = { path = "crates/mihomo-proxy" }
+mihomo-tunnel = { path = "crates/mihomo-tunnel" }
+mihomo-listener = { path = "crates/mihomo-listener" }
+mihomo-api = { path = "crates/mihomo-api" }
+mihomo-config = { path = "crates/mihomo-config" }

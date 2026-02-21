@@ -1,0 +1,45 @@
+use serde::Deserialize;
+use std::collections::HashMap;
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "kebab-case")]
+pub struct RawConfig {
+    pub port: Option<u16>,
+    pub socks_port: Option<u16>,
+    pub mixed_port: Option<u16>,
+    pub allow_lan: Option<bool>,
+    pub bind_address: Option<String>,
+    pub mode: Option<String>,
+    pub log_level: Option<String>,
+    pub ipv6: Option<bool>,
+    pub external_controller: Option<String>,
+    pub secret: Option<String>,
+    pub dns: Option<RawDns>,
+    pub proxies: Option<Vec<HashMap<String, serde_yaml::Value>>>,
+    pub proxy_groups: Option<Vec<RawProxyGroup>>,
+    pub rules: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "kebab-case")]
+pub struct RawDns {
+    pub enable: Option<bool>,
+    pub listen: Option<String>,
+    pub enhanced_mode: Option<String>,
+    pub fake_ip_range: Option<String>,
+    pub nameserver: Option<Vec<String>>,
+    pub fallback: Option<Vec<String>>,
+    pub fake_ip_filter: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "kebab-case")]
+pub struct RawProxyGroup {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub group_type: String,
+    pub proxies: Option<Vec<String>>,
+    pub url: Option<String>,
+    pub interval: Option<u64>,
+    pub tolerance: Option<u16>,
+}

@@ -1,0 +1,52 @@
+name: Test
+
+on:
+  push:
+    paths: ["mihomo-rust/**"]
+  pull_request:
+    paths: ["mihomo-rust/**"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mihomo-rust
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mihomo-rust
+          cache-on-failure: true
+
+      - name: Cache ssserver binary
+        id: cache-ssserver
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/ssserver
+          key: ssserver-${{ runner.os }}-${{ hashFiles('mihomo-rust/Cargo.lock') }}
+
+      - name: Install ssserver
+        if: steps.cache-ssserver.outputs.cache-hit != 'true'
+        run: cargo install shadowsocks-rust --features "stream-cipher aead-cipher-2022" --locked
+
+      - name: Build
+        run: cargo build --tests
+
+      - name: Unit tests
+        run: cargo test --lib
+
+      - name: Shadowsocks integration tests
+        run: cargo test --test shadowsocks_integration -- --nocapture
+
+      - name: Trojan integration tests
+        run: cargo test --test trojan_integration -- --nocapture
+
+      - name: Rules tests
+        run: cargo test --test rules_test -- --nocapture

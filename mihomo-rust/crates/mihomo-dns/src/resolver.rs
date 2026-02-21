@@ -1,0 +1,179 @@
+use crate::cache::DnsCache;
+use crate::fakeip::FakeIpPool;
+use dashmap::DashMap;
+use hickory_proto::xfer::Protocol;
+use hickory_resolver::config::{NameServerConfig, ResolverConfig};
+use hickory_resolver::name_server::TokioConnectionProvider;
+use hickory_resolver::TokioResolver;
+use mihomo_common::DnsMode;
+use mihomo_trie::DomainTrie;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
+use std::time::Duration;
+use tracing::{debug, warn};
+
+pub struct Resolver {
+    main: TokioResolver,
+    fallback: Option<TokioResolver>,
+    cache: DnsCache,
+    fakeip_pool: Option<Arc<FakeIpPool>>,
+    mode: DnsMode,
+    // Policy: domain trie mapping to specific resolver index
+    hosts: DomainTrie<Vec<IpAddr>>,
+    // In-flight dedup
+    #[allow(dead_code)]
+    inflight: DashMap<String, ()>,
+}
+
+impl Resolver {
+    pub fn new(
+        main_servers: Vec<SocketAddr>,
+        fallback_servers: Vec<SocketAddr>,
+        fakeip_pool: Option<Arc<FakeIpPool>>,
+        mode: DnsMode,
+        hosts: DomainTrie<Vec<IpAddr>>,
+    ) -> Self {
+        let main = Self::build_resolver(&main_servers);
+        let fallback = if fallback_servers.is_empty() {
+            None
+        } else {
+            Some(Self::build_resolver(&fallback_servers))
+        };
+
+        Self {
+            main,
+            fallback,
+            cache: DnsCache::new(4096),
+            fakeip_pool,
+            mode,
+            hosts,
+            inflight: DashMap::new(),
+        }
+    }
+
+    fn build_resolver(servers: &[SocketAddr]) -> TokioResolver {
+        let mut config = ResolverConfig::new();
+        for &addr in servers {
+            config.add_name_server(NameServerConfig::new(addr, Protocol::Udp));
+            config.add_name_server(NameServerConfig::new(addr, Protocol::Tcp));
+        }
+        let mut builder = TokioResolver::builder_with_config(
+            config,
+            TokioConnectionProvider::default(),
+        );
+        let opts = builder.options_mut();
+        opts.timeout = Duration::from_secs(5);
+        opts.attempts = 2;
+        opts.cache_size = 0; // We use our own cache
+        builder.build()
+    }
+
+    pub async fn resolve_ip(&self, host: &str) -> Option<IpAddr> {
+        // 1. Check hosts file
+        if let Some(ips) = self.hosts.search(host) {
+            return ips.first().copied();
+        }
+
+        // 2. Check FakeIP mode
+        if self.mode == DnsMode::FakeIp {
+            if let Some(pool) = &self.fakeip_pool {
+                return Some(pool.lookup_host(host));
+            }
+        }
+
+        // 3. Check cache
+        if let Some(ips) = self.cache.get(host) {
+            return ips.first().copied();
+        }
+
+        // 4. Resolve via DNS
+        self.lookup_actual(host).await
+    }
+
+    pub async fn lookup_ipv4(&self, host: &str) -> Option<IpAddr> {
+        if let Some(ips) = self.hosts.search(host) {
+            return ips.iter().find(|ip| ip.is_ipv4()).copied();
+        }
+        if let Some(ips) = self.cache.get(host) {
+            return ips.iter().find(|ip| ip.is_ipv4()).copied();
+        }
+        let ips = self.lookup_actual_all(host).await?;
+        ips.into_iter().find(|ip| ip.is_ipv4())
+    }
+
+    pub async fn lookup_ipv6(&self, host: &str) -> Option<IpAddr> {
+        if let Some(ips) = self.hosts.search(host) {
+            return ips.iter().find(|ip| ip.is_ipv6()).copied();
+        }
+        if let Some(ips) = self.cache.get(host) {
+            return ips.iter().find(|ip| ip.is_ipv6()).copied();
+        }
+        let ips = self.lookup_actual_all(host).await?;
+        ips.into_iter().find(|ip| ip.is_ipv6())
+    }
+
+    async fn lookup_actual(&self, host: &str) -> Option<IpAddr> {
+        let ips = self.lookup_actual_all(host).await?;
+        ips.into_iter().next()
+    }
+
+    async fn lookup_actual_all(&self, host: &str) -> Option<Vec<IpAddr>> {
+        debug!("DNS lookup: {}", host);
+
+        // Try main resolver
+        match self.main.lookup_ip(host).await {
+            Ok(lookup) => {
+                let ips: Vec<IpAddr> = lookup.iter().collect();
+                if !ips.is_empty() {
+                    self.cache.put(host, ips.clone(), Duration::from_secs(300));
+                    return Some(ips);
+                }
+            }
+            Err(e) => {
+                debug!("Main DNS lookup failed for {}: {}", host, e);
+            }
+        }
+
+        // Try fallback resolver
+        if let Some(fallback) = &self.fallback {
+            match fallback.lookup_ip(host).await {
+                Ok(lookup) => {
+                    let ips: Vec<IpAddr> = lookup.iter().collect();
+                    if !ips.is_empty() {
+                        self.cache.put(host, ips.clone(), Duration::from_secs(300));
+                        return Some(ips);
+                    }
+                }
+                Err(e) => {
+                    warn!("Fallback DNS lookup failed for {}: {}", host, e);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Reverse lookup for FakeIP: given a fake IP, return the original host
+    pub fn fake_ip_reverse(&self, ip: IpAddr) -> Option<String> {
+        self.fakeip_pool.as_ref()?.lookup_ip(ip)
+    }
+
+    /// Check if an IP is a fake IP
+    pub fn is_fake_ip(&self, ip: IpAddr) -> bool {
+        self.fakeip_pool
+            .as_ref()
+            .is_some_and(|pool| pool.contains(ip))
+    }
+
+    pub fn mode(&self) -> DnsMode {
+        self.mode
+    }
+
+    pub fn fakeip_pool(&self) -> Option<&Arc<FakeIpPool>> {
+        self.fakeip_pool.as_ref()
+    }
+
+    pub fn clear_cache(&self) {
+        self.cache.clear();
+    }
+}
