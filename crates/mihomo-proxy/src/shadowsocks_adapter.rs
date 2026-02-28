@@ -48,16 +48,11 @@ impl ShadowsocksAdapter {
                 plugin_args: vec![],
                 plugin_mode: Mode::TcpOnly,
             };
-            let started =
-                Plugin::start(&plugin_config, server_config.addr(), PluginMode::Client)
-                    .map_err(|e| {
-                        MihomoError::Config(format!(
-                            "failed to start ss plugin '{}': {}",
-                            pname, e
-                        ))
-                    })?;
-            server_config
-                .set_plugin_addr(ServerAddr::SocketAddr(started.local_addr()));
+            let started = Plugin::start(&plugin_config, server_config.addr(), PluginMode::Client)
+                .map_err(|e| {
+                MihomoError::Config(format!("failed to start ss plugin '{}': {}", pname, e))
+            })?;
+            server_config.set_plugin_addr(ServerAddr::SocketAddr(started.local_addr()));
             server_config.set_plugin(plugin_config);
             debug!("SS plugin '{}' started on {}", pname, started.local_addr());
             Some(started)
