@@ -38,6 +38,18 @@ proxies:
     password: "your-password"
     udp: true
 
+  # - name: "ss-obfs-example"
+  #   type: ss
+  #   server: 1.2.3.4
+  #   port: 8388
+  #   cipher: aes-256-gcm
+  #   password: "your-password"
+  #   udp: true
+  #   plugin: obfs-local
+  #   plugin-opts:
+  #     mode: http
+  #     host: bing.com
+
   - name: "trojan-example"
     type: trojan
     server: 5.6.7.8

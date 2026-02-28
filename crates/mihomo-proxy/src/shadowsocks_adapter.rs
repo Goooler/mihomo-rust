@@ -2,9 +2,10 @@ use async_trait::async_trait;
 use mihomo_common::{
     AdapterType, Metadata, MihomoError, ProxyAdapter, ProxyConn, ProxyPacketConn, Result,
 };
-use shadowsocks::config::{ServerConfig, ServerType};
+use shadowsocks::config::{Mode, ServerAddr, ServerConfig, ServerType};
 use shadowsocks::context::Context;
 use shadowsocks::crypto::CipherKind;
+use shadowsocks::plugin::{Plugin, PluginConfig, PluginMode};
 use shadowsocks::relay::udprelay::{DatagramReceive, DatagramSend, DatagramSocket, ProxySocket};
 use shadowsocks::relay::Address;
 use shadowsocks::ProxyClientStream;
@@ -17,9 +18,11 @@ pub struct ShadowsocksAdapter {
     context: shadowsocks::context::SharedContext,
     addr_str: String,
     support_udp: bool,
+    _plugin: Option<Plugin>,
 }
 
 impl ShadowsocksAdapter {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: &str,
         server: &str,
@@ -27,20 +30,48 @@ impl ShadowsocksAdapter {
         password: &str,
         cipher: &str,
         udp: bool,
+        plugin_name: Option<&str>,
+        plugin_opts: Option<&str>,
     ) -> Result<Self> {
         let cipher_kind = cipher
             .parse::<CipherKind>()
             .map_err(|_| MihomoError::Config(format!("unknown cipher: {}", cipher)))?;
-        let server_config = ServerConfig::new((server, port), password, cipher_kind)
+        let mut server_config = ServerConfig::new((server, port), password, cipher_kind)
             .map_err(|e| MihomoError::Config(format!("invalid ss config: {}", e)))?;
         let context = Context::new_shared(ServerType::Local);
         let addr_str = format!("{}:{}", server, port);
+
+        let plugin = if let Some(pname) = plugin_name {
+            let plugin_config = PluginConfig {
+                plugin: pname.to_string(),
+                plugin_opts: plugin_opts.map(String::from),
+                plugin_args: vec![],
+                plugin_mode: Mode::TcpOnly,
+            };
+            let started =
+                Plugin::start(&plugin_config, server_config.addr(), PluginMode::Client)
+                    .map_err(|e| {
+                        MihomoError::Config(format!(
+                            "failed to start ss plugin '{}': {}",
+                            pname, e
+                        ))
+                    })?;
+            server_config
+                .set_plugin_addr(ServerAddr::SocketAddr(started.local_addr()));
+            server_config.set_plugin(plugin_config);
+            debug!("SS plugin '{}' started on {}", pname, started.local_addr());
+            Some(started)
+        } else {
+            None
+        };
+
         Ok(Self {
             name: name.to_string(),
             server_config,
             context,
             addr_str,
             support_udp: udp,
+            _plugin: plugin,
         })
     }
 }

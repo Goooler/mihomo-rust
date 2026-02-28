@@ -1,5 +1,8 @@
 use mihomo_config::load_config_from_str;
 
+// Some tests use #[tokio::test] because ShadowsocksAdapter plugin startup
+// internally requires a tokio runtime (tokio::process::Command).
+
 #[test]
 fn test_minimal_config() {
     let yaml = r#"
@@ -373,6 +376,48 @@ rules:
     assert_eq!(config.rules.len(), 2);
     assert!(config.dns.listen_addr.is_some());
     assert!(config.api.external_controller.is_some());
+}
+
+#[tokio::test]
+async fn test_proxy_parsing_ss_with_plugin_missing_binary() {
+    // A non-existent plugin binary causes proxy creation to fail.
+    // The config loader logs a warning and skips the proxy (does not panic).
+    let yaml = r#"
+proxies:
+  - name: "ss-missing-plugin"
+    type: ss
+    server: "1.2.3.4"
+    port: 8388
+    cipher: "aes-256-gcm"
+    password: "password123"
+    plugin: nonexistent-plugin-binary-xyz
+    plugin-opts:
+      mode: http
+      host: example.com
+"#;
+    let config = load_config_from_str(yaml).unwrap();
+    // The proxy is skipped because the plugin binary doesn't exist
+    assert!(!config.proxies.contains_key("ss-missing-plugin"));
+}
+
+#[tokio::test]
+async fn test_proxy_parsing_ss_with_plugin_opts_string() {
+    // Plugin opts can be passed as a pre-formatted string.
+    // Uses a non-existent plugin to verify config parsing succeeds.
+    let yaml = r#"
+proxies:
+  - name: "ss-plugin-str"
+    type: ss
+    server: "1.2.3.4"
+    port: 8388
+    cipher: "aes-256-gcm"
+    password: "password123"
+    plugin: nonexistent-plugin-binary-xyz
+    plugin-opts: "obfs=http;obfs-host=example.com"
+"#;
+    let config = load_config_from_str(yaml).unwrap();
+    // Skipped because plugin binary doesn't exist, but config parsing succeeds
+    assert!(!config.proxies.contains_key("ss-plugin-str"));
 }
 
 #[test]

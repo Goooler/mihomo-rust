@@ -88,9 +88,20 @@ pub fn parse_proxy(
                 .and_then(|v| v.as_str())
                 .ok_or("missing cipher")?;
             let udp = config.get("udp").and_then(|v| v.as_bool()).unwrap_or(false);
+            let plugin = config.get("plugin").and_then(|v| v.as_str());
+            let plugin_opts_str = config.get("plugin-opts").and_then(serialize_plugin_opts);
 
-            let adapter = ShadowsocksAdapter::new(name, server, port, password, cipher, udp)
-                .map_err(|e| format!("ss: {}", e))?;
+            let adapter = ShadowsocksAdapter::new(
+                name,
+                server,
+                port,
+                password,
+                cipher,
+                udp,
+                plugin,
+                plugin_opts_str.as_deref(),
+            )
+            .map_err(|e| format!("ss: {}", e))?;
             Ok(Arc::new(WrappedProxy::new(Box::new(adapter))))
         }
         "trojan" => {
@@ -117,6 +128,35 @@ pub fn parse_proxy(
             Ok(Arc::new(WrappedProxy::new(Box::new(adapter))))
         }
         _ => Err(format!("unsupported proxy type: {}", proxy_type)),
+    }
+}
+
+/// Convert a YAML `plugin-opts` value to the SIP003 semicolon-separated format.
+/// Accepts either a string (passed through) or a YAML map (serialized as `key=value;...`).
+fn serialize_plugin_opts(opts: &serde_yaml::Value) -> Option<String> {
+    match opts {
+        serde_yaml::Value::String(s) => Some(s.clone()),
+        serde_yaml::Value::Mapping(map) => {
+            let parts: Vec<String> = map
+                .iter()
+                .filter_map(|(k, v)| {
+                    let key = k.as_str()?;
+                    let val = match v {
+                        serde_yaml::Value::String(s) => s.clone(),
+                        serde_yaml::Value::Bool(b) => b.to_string(),
+                        serde_yaml::Value::Number(n) => n.to_string(),
+                        _ => return None,
+                    };
+                    Some(format!("{}={}", key, val))
+                })
+                .collect();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join(";"))
+            }
+        }
+        _ => None,
     }
 }
 
@@ -150,5 +190,54 @@ pub fn parse_proxy_group(
         }
         "fallback" => Ok(Arc::new(FallbackGroup::new(&config.name, proxies))),
         _ => Err(format!("unsupported group type: {}", config.group_type)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_serialize_plugin_opts_map() {
+        let yaml: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+mode: websocket
+host: example.com
+tls: true
+"#,
+        )
+        .unwrap();
+        let result = serialize_plugin_opts(&yaml).unwrap();
+        assert!(result.contains("mode=websocket"));
+        assert!(result.contains("host=example.com"));
+        assert!(result.contains("tls=true"));
+        // Verify semicolon-separated format
+        assert_eq!(result.matches(';').count(), 2);
+    }
+
+    #[test]
+    fn test_serialize_plugin_opts_string_passthrough() {
+        let yaml = serde_yaml::Value::String("obfs=http;obfs-host=example.com".to_string());
+        let result = serialize_plugin_opts(&yaml).unwrap();
+        assert_eq!(result, "obfs=http;obfs-host=example.com");
+    }
+
+    #[test]
+    fn test_serialize_plugin_opts_empty_map() {
+        let yaml = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+        assert!(serialize_plugin_opts(&yaml).is_none());
+    }
+
+    #[test]
+    fn test_serialize_plugin_opts_null() {
+        let yaml = serde_yaml::Value::Null;
+        assert!(serialize_plugin_opts(&yaml).is_none());
+    }
+
+    #[test]
+    fn test_serialize_plugin_opts_number_value() {
+        let yaml: serde_yaml::Value = serde_yaml::from_str("port: 8080").unwrap();
+        let result = serialize_plugin_opts(&yaml).unwrap();
+        assert_eq!(result, "port=8080");
     }
 }

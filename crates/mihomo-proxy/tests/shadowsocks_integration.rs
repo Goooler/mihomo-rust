@@ -25,6 +25,19 @@ fn ssserver_available() -> bool {
         .is_ok()
 }
 
+fn obfs_available() -> bool {
+    std::process::Command::new("obfs-local")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
+        && std::process::Command::new("obfs-server")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok()
+}
+
 /// Start a TCP echo server that reads data and writes it back.
 async fn start_tcp_echo_server() -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -71,16 +84,39 @@ async fn start_udp_echo_server() -> (SocketAddr, tokio::task::JoinHandle<()>) {
 
 /// Start ssserver with the given port and target echo servers configured.
 async fn start_ssserver(ss_port: u16) -> Child {
+    start_ssserver_inner(ss_port, None, None).await
+}
+
+/// Start ssserver with an optional SIP003 plugin.
+async fn start_ssserver_with_plugin(ss_port: u16, plugin: &str, plugin_opts: &str) -> Child {
+    start_ssserver_inner(ss_port, Some(plugin), Some(plugin_opts)).await
+}
+
+async fn start_ssserver_inner(
+    ss_port: u16,
+    plugin: Option<&str>,
+    plugin_opts: Option<&str>,
+) -> Child {
+    let mut args = vec![
+        "-s".to_string(),
+        format!("127.0.0.1:{}", ss_port),
+        "-k".to_string(),
+        SS_PASSWORD.to_string(),
+        "-m".to_string(),
+        SS_CIPHER.to_string(),
+        "-U".to_string(), // enable UDP relay
+    ];
+    if let Some(p) = plugin {
+        args.push("--plugin".to_string());
+        args.push(p.to_string());
+    }
+    if let Some(opts) = plugin_opts {
+        args.push("--plugin-opts".to_string());
+        args.push(opts.to_string());
+    }
+
     let child = Command::new("ssserver")
-        .args([
-            "-s",
-            &format!("127.0.0.1:{}", ss_port),
-            "-k",
-            SS_PASSWORD,
-            "-m",
-            SS_CIPHER,
-            "-U", // enable UDP relay
-        ])
+        .args(&args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true)
@@ -126,6 +162,8 @@ async fn test_ss_tcp_relay() {
         SS_PASSWORD,
         SS_CIPHER,
         false,
+        None,
+        None,
     )
     .unwrap();
 
@@ -186,6 +224,8 @@ async fn test_ss_udp_relay() {
         SS_PASSWORD,
         SS_CIPHER,
         true,
+        None,
+        None,
     )
     .unwrap();
 
@@ -229,4 +269,76 @@ async fn test_ss_udp_relay() {
         .expect("UDP read2 timed out")
         .expect("UDP read_packet2 failed");
     assert_eq!(&buf[..n2], payload2, "UDP echo mismatch round 2");
+}
+
+#[tokio::test]
+async fn test_ss_tcp_relay_with_obfs_plugin() {
+    if !ssserver_available() {
+        eprintln!("SKIP: ssserver not found in PATH");
+        return;
+    }
+    if !obfs_available() {
+        eprintln!("SKIP: obfs-local/obfs-server not found in PATH");
+        return;
+    }
+
+    // Start echo server and ssserver with obfs-server plugin
+    let (echo_addr, _echo_handle) = start_tcp_echo_server().await;
+    let ss_port = free_port().await;
+    let _ssserver = start_ssserver_with_plugin(ss_port, "obfs-server", "obfs=http").await;
+
+    // Create adapter with obfs-local plugin (client side)
+    let adapter = ShadowsocksAdapter::new(
+        "test-ss-obfs",
+        "127.0.0.1",
+        ss_port,
+        SS_PASSWORD,
+        SS_CIPHER,
+        false,
+        Some("obfs-local"),
+        Some("obfs=http"),
+    )
+    .expect("failed to create adapter with obfs-local plugin");
+
+    // Give the obfs-local plugin subprocess time to start listening
+    sleep(Duration::from_secs(1)).await;
+
+    // Build metadata pointing to the echo server
+    let metadata = Metadata {
+        network: Network::Tcp,
+        dst_ip: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        dst_port: echo_addr.port(),
+        ..Default::default()
+    };
+
+    // Dial TCP through the SS proxy with obfs plugin
+    let result = timeout(TIMEOUT, adapter.dial_tcp(&metadata)).await;
+    let mut conn = result
+        .expect("TCP dial timed out")
+        .expect("TCP dial failed");
+
+    // Write and read back
+    let payload = b"hello shadowsocks obfs-http";
+    conn.write_all(payload).await.expect("TCP write failed");
+    conn.flush().await.expect("TCP flush failed");
+
+    let mut buf = vec![0u8; payload.len()];
+    conn.read_exact(&mut buf)
+        .await
+        .expect("TCP read_exact failed");
+    assert_eq!(&buf, payload, "TCP echo mismatch through obfs plugin");
+
+    // Second round
+    let payload2 = b"obfs round two";
+    conn.write_all(payload2).await.expect("TCP write2 failed");
+    conn.flush().await.expect("TCP flush2 failed");
+
+    let mut buf2 = vec![0u8; payload2.len()];
+    conn.read_exact(&mut buf2)
+        .await
+        .expect("TCP read_exact2 failed");
+    assert_eq!(
+        &buf2, payload2,
+        "TCP echo mismatch through obfs plugin round 2"
+    );
 }
