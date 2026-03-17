@@ -244,7 +244,7 @@ async function api(path, opts) {
   return res.json();
 }
 
-function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function esc(s) { if (!s) return ''; return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 
 // ── Overview ─────────────────────────────────────────────────────
 
@@ -304,7 +304,7 @@ async function loadProxySelector() {
       for (const p of g.proxies) {
         const selected = (p === g.now) ? ' selected' : '';
         if (isSelector) {
-          grid += `<div class="proxy-item${selected}" onclick="selectInGroup('${esc(g.name)}','${esc(p)}',this)" title="${esc(p)}">${esc(p)}</div>`;
+          grid += `<div class="proxy-item${selected}" data-group="${esc(g.name)}" data-proxy="${esc(p)}" title="${esc(p)}">${esc(p)}</div>`;
         } else {
           grid += `<div class="proxy-item non-select" title="${esc(p)}">${esc(p)}</div>`;
         }
@@ -312,6 +312,9 @@ async function loadProxySelector() {
       grid += '</div>';
 
       card.innerHTML = header + grid;
+      card.querySelectorAll('.proxy-item[data-proxy]').forEach(item => {
+        item.addEventListener('click', () => selectInGroup(item.dataset.group, item.dataset.proxy, item));
+      });
       container.appendChild(card);
     }
   } catch (e) { toast('Failed to load proxies: ' + e.message, 'error'); }
@@ -340,7 +343,9 @@ async function loadSubscriptions() {
     empty.classList.toggle('hidden', subs.length > 0);
     for (const s of subs) {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${esc(s.name)}</td><td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.url)}">${esc(s.url)}</td><td>${s.proxy_count}</td><td>${s.group_count}</td><td>${s.rule_count}</td><td>${formatTime(s.last_updated)}</td><td><button class="btn btn-primary btn-sm" onclick="refreshSub('${esc(s.name)}')">Refresh</button> <button class="btn btn-danger btn-sm" onclick="deleteSub('${esc(s.name)}')">Delete</button></td>`;
+      tr.innerHTML = `<td>${esc(s.name)}</td><td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.url)}">${esc(s.url)}</td><td>${s.proxy_count}</td><td>${s.group_count}</td><td>${s.rule_count}</td><td>${formatTime(s.last_updated)}</td><td><button class="btn btn-primary btn-sm" data-action="refresh">Refresh</button> <button class="btn btn-danger btn-sm" data-action="delete">Delete</button></td>`;
+      tr.querySelector('[data-action="refresh"]').addEventListener('click', () => refreshSub(s.name));
+      tr.querySelector('[data-action="delete"]').addEventListener('click', () => deleteSub(s.name));
       tbody.appendChild(tr);
     }
   } catch (e) { toast('Failed to load subscriptions: ' + e.message, 'error'); }
@@ -401,7 +406,8 @@ async function loadGroups() {
       const div = document.createElement('div');
       div.className = 'card';
       const badgeClass = g.type === 'select' ? 'select' : g.type === 'url-test' ? 'url-test' : 'fallback';
-      div.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><div><strong>${esc(g.name)}</strong> <span class="badge badge-${badgeClass}">${esc(g.type)}</span> <span style="color:#8899aa;font-size:12px">${g.proxies.length} members</span></div><button class="btn btn-danger btn-sm" onclick="deleteGroup('${esc(g.name)}')">Delete</button></div>`;
+      div.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><div><strong>${esc(g.name)}</strong> <span class="badge badge-${badgeClass}">${esc(g.type)}</span> <span style="color:#8899aa;font-size:12px">${g.proxies.length} members</span></div><button class="btn btn-danger btn-sm" data-delete-group="${esc(g.name)}">Delete</button></div>`;
+      div.querySelector('[data-delete-group]').addEventListener('click', () => deleteGroup(g.name));
       container.appendChild(div);
     }
     updateRuleTargets();

@@ -987,3 +987,40 @@ async fn put_proxy_not_a_group() {
     // DIRECT is not a SelectorGroup, as_any returns None, falls through to NOT_FOUND
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn select_proxy_roundtrip() {
+    let mut raw = test_raw_config();
+    raw.proxy_groups = Some(vec![RawProxyGroup {
+        name: "Sel".into(),
+        group_type: "select".into(),
+        proxies: Some(vec!["DIRECT".into(), "REJECT".into()]),
+        url: None, interval: None, tolerance: None,
+    }]);
+    let state = test_state(raw);
+    
+    // Select REJECT
+    let app = create_router(state.clone());
+    let resp = app.oneshot(
+        Request::builder()
+            .method("PUT")
+            .uri("/api/proxy-groups/Sel/select")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(r#"{"name":"REJECT"}"#))
+            .unwrap(),
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT, "select failed");
+    
+    // Read back proxy groups
+    let app = create_router(state.clone());
+    let resp = app.oneshot(
+        Request::get("/api/proxy-groups")
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let groups: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let sel = &groups[0];
+    assert_eq!(sel["now"], "REJECT", "now field should be REJECT after select");
+}
