@@ -221,8 +221,14 @@ fn service_status() -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
+}
+
+#[cfg(not(unix))]
+fn is_root() -> bool {
+    true
 }
 
 fn run_cmd(cmd: &str, args: &[&str]) -> Result<()> {

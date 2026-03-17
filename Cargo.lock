@@ -1645,7 +1645,7 @@ dependencies = [
 
 [[package]]
 name = "mihomo-api"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "dashmap",
@@ -1671,7 +1671,7 @@ dependencies = [
 
 [[package]]
 name = "mihomo-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1693,7 +1693,7 @@ dependencies = [
 
 [[package]]
 name = "mihomo-common"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1707,7 +1707,7 @@ dependencies = [
 
 [[package]]
 name = "mihomo-config"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1728,7 +1728,7 @@ dependencies = [
 
 [[package]]
 name = "mihomo-dns"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1749,7 +1749,7 @@ dependencies = [
 
 [[package]]
 name = "mihomo-listener"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1767,7 +1767,7 @@ dependencies = [
 
 [[package]]
 name = "mihomo-proxy"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1792,7 +1792,7 @@ dependencies = [
 
 [[package]]
 name = "mihomo-rules"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ipnet",
  "maxminddb",
@@ -1806,11 +1806,11 @@ dependencies = [
 
 [[package]]
 name = "mihomo-trie"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "mihomo-tunnel"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "bytes",

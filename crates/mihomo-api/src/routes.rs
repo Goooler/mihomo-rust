@@ -65,7 +65,7 @@ async fn hello() -> &'static str {
 struct VersionResponse { version: String, meta: bool }
 
 async fn version() -> Json<VersionResponse> {
-    Json(VersionResponse { version: "0.1.0".to_string(), meta: true })
+    Json(VersionResponse { version: env!("CARGO_PKG_VERSION").to_string(), meta: true })
 }
 
 #[derive(Serialize)]

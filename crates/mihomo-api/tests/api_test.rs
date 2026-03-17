@@ -133,7 +133,7 @@ async fn version_endpoint() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
-    assert_eq!(json["version"], "0.1.0");
+    assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(json["meta"], true);
 }
 

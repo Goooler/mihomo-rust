@@ -144,6 +144,20 @@ cp config.example.yaml config.yaml
 ./target/release/mihomo -f config.yaml -t
 ```
 
+### Install as systemd service (Linux)
+
+```bash
+sudo ./target/release/mihomo install -f /path/to/config.yaml
+
+# Manage the service
+sudo systemctl status mihomo
+sudo systemctl restart mihomo
+sudo journalctl -u mihomo -f
+
+# Uninstall
+sudo ./target/release/mihomo uninstall
+```
+
 ### Open the Web UI
 
 After starting, open your browser to:
