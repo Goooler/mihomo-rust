@@ -125,52 +125,6 @@ fn test_api_config_none() {
 }
 
 #[test]
-fn test_tun_config() {
-    let yaml = r#"
-tun:
-  enable: true
-  device: utun42
-  mtu: 9000
-  inet4-address: "198.18.0.1/16"
-  dns-hijack:
-    - "198.18.0.2:53"
-  auto-route: true
-"#;
-    let config = load_config_from_str(yaml).unwrap();
-    let tun = config.tun.unwrap();
-    assert!(tun.enable);
-    assert_eq!(tun.device.as_deref(), Some("utun42"));
-    assert_eq!(tun.mtu, 9000);
-    assert_eq!(tun.inet4_address, "198.18.0.1/16");
-    assert_eq!(tun.dns_hijack.len(), 1);
-    assert_eq!(tun.dns_hijack[0].to_string(), "198.18.0.2:53");
-    assert!(tun.auto_route);
-}
-
-#[test]
-fn test_tun_config_defaults() {
-    let yaml = r#"
-tun:
-  enable: false
-"#;
-    let config = load_config_from_str(yaml).unwrap();
-    let tun = config.tun.unwrap();
-    assert!(!tun.enable);
-    assert!(tun.device.is_none());
-    assert_eq!(tun.mtu, 1500);
-    assert_eq!(tun.inet4_address, "198.18.0.1/16");
-    assert!(tun.dns_hijack.is_empty());
-    assert!(!tun.auto_route);
-}
-
-#[test]
-fn test_no_tun_config() {
-    let yaml = "";
-    let config = load_config_from_str(yaml).unwrap();
-    assert!(config.tun.is_none());
-}
-
-#[test]
 fn test_dns_disabled_by_default() {
     let yaml = "";
     let config = load_config_from_str(yaml).unwrap();
@@ -426,17 +380,3 @@ fn test_invalid_yaml() {
     assert!(load_config_from_str(yaml).is_err());
 }
 
-#[test]
-fn test_dns_hijack_invalid_address_skipped() {
-    let yaml = r#"
-tun:
-  enable: true
-  dns-hijack:
-    - "198.18.0.2:53"
-    - "not-a-valid-address"
-"#;
-    let config = load_config_from_str(yaml).unwrap();
-    let tun = config.tun.unwrap();
-    // Only valid addresses are kept
-    assert_eq!(tun.dns_hijack.len(), 1);
-}

@@ -11,6 +11,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::{error, info};
 
+#[cfg(target_os = "linux")]
 const SERVICE_NAME: &str = "mihomo";
 
 #[derive(Parser)]
@@ -34,13 +35,13 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Install as a systemd service
+    /// Install as a system service (systemd on Linux, launchd on macOS)
     Install {
-        /// Config file path (absolute) for the service
+        /// Config file path for the service
         #[arg(short = 'f', long = "config")]
         config: Option<String>,
     },
-    /// Uninstall the systemd service
+    /// Uninstall the system service
     Uninstall,
     /// Show service status
     Status,
@@ -98,6 +99,7 @@ fn handle_service_command(cmd: &Command, args: &Args) -> Result<()> {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn install_service(config_override: Option<&str>, args: &Args) -> Result<()> {
     // Determine the binary path
     let exe_path = std::env::current_exe()?;
@@ -184,6 +186,7 @@ WantedBy=multi-user.target
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn uninstall_service() -> Result<()> {
     if !is_root() {
         let exe = std::env::current_exe().unwrap_or_default();
@@ -210,6 +213,7 @@ fn uninstall_service() -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn service_status() -> Result<()> {
     let output = std::process::Command::new("systemctl")
         .args(["status", SERVICE_NAME])
@@ -221,14 +225,174 @@ fn service_status() -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
-fn is_root() -> bool {
-    unsafe { libc::geteuid() == 0 }
+// --- macOS launchd user agent ---
+
+#[cfg(target_os = "macos")]
+const LAUNCHD_LABEL: &str = "com.mihomo.proxy";
+
+#[cfg(target_os = "macos")]
+fn macos_dirs() -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)> {
+    let home = std::env::var("HOME").map_err(|_| anyhow::anyhow!("HOME not set"))?;
+    let home = std::path::PathBuf::from(home);
+    let app_support = home.join("Library/Application Support/mihomo");
+    let log_dir = home.join("Library/Logs/mihomo");
+    let launch_agents = home.join("Library/LaunchAgents");
+    Ok((app_support, log_dir, launch_agents))
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "macos")]
+fn install_service(config_override: Option<&str>, args: &Args) -> Result<()> {
+    let exe_path = std::env::current_exe()?;
+    let exe_path = exe_path
+        .canonicalize()
+        .unwrap_or(exe_path)
+        .to_string_lossy()
+        .to_string();
+
+    // Resolve source config path
+    let config_rel = config_override.unwrap_or(&args.config);
+    let src_config = if std::path::Path::new(config_rel).is_absolute() {
+        std::path::PathBuf::from(config_rel)
+    } else {
+        std::env::current_dir()?.join(config_rel)
+    };
+
+    if !src_config.exists() {
+        anyhow::bail!("Config file not found: {}", src_config.display());
+    }
+
+    let (app_support, log_dir, launch_agents) = macos_dirs()?;
+
+    // Create directories
+    std::fs::create_dir_all(&app_support)?;
+    std::fs::create_dir_all(&log_dir)?;
+    std::fs::create_dir_all(&launch_agents)?;
+
+    // Copy config to ~/Library/Application Support/mihomo/config.yaml
+    let dest_config = app_support.join("config.yaml");
+    std::fs::copy(&src_config, &dest_config)?;
+    println!("Config copied to {}", dest_config.display());
+
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{exe}</string>
+        <string>-f</string>
+        <string>{config}</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{work_dir}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{log_dir}/mihomo.log</string>
+    <key>StandardErrorPath</key>
+    <string>{log_dir}/mihomo.err.log</string>
+</dict>
+</plist>
+"#,
+        label = LAUNCHD_LABEL,
+        exe = exe_path,
+        config = dest_config.display(),
+        work_dir = app_support.display(),
+        log_dir = log_dir.display(),
+    );
+
+    let plist_path = launch_agents.join(format!("{}.plist", LAUNCHD_LABEL));
+
+    // Bootout existing service if loaded (ignore errors)
+    let uid = unsafe { libc::getuid() };
+    let domain_target = format!("gui/{}", uid);
+    let service_target = format!("gui/{}/{}", uid, LAUNCHD_LABEL);
+    let _ = std::process::Command::new("launchctl")
+        .args(["bootout", &service_target])
+        .output();
+
+    // Write plist
+    std::fs::write(&plist_path, &plist)?;
+    println!("Plist written to {}", plist_path.display());
+
+    // Bootstrap the service
+    run_cmd(
+        "launchctl",
+        &["bootstrap", &domain_target, &plist_path.to_string_lossy()],
+    )?;
+
+    println!();
+    println!("mihomo service installed and started.");
+    println!();
+    println!("  Config:  {}", dest_config.display());
+    println!("  Binary:  {}", exe_path);
+    println!("  Logs:    {}/mihomo.log", log_dir.display());
+    println!();
+    println!("Commands:");
+    println!("  {} status", exe_path);
+    println!("  launchctl kickstart -k {}", service_target);
+    println!("  tail -f {}/mihomo.log", log_dir.display());
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn uninstall_service() -> Result<()> {
+    let (app_support, _log_dir, launch_agents) = macos_dirs()?;
+    let plist_path = launch_agents.join(format!("{}.plist", LAUNCHD_LABEL));
+
+    // Bootout the service (ignore errors if not loaded)
+    let uid = unsafe { libc::getuid() };
+    let service_target = format!("gui/{}/{}", uid, LAUNCHD_LABEL);
+    let _ = std::process::Command::new("launchctl")
+        .args(["bootout", &service_target])
+        .output();
+
+    // Remove plist
+    if plist_path.exists() {
+        std::fs::remove_file(&plist_path)?;
+        println!("Removed {}", plist_path.display());
+    }
+
+    // Remove copied config
+    let dest_config = app_support.join("config.yaml");
+    if dest_config.exists() {
+        std::fs::remove_file(&dest_config)?;
+        println!("Removed {}", dest_config.display());
+    }
+
+    println!("mihomo service uninstalled.");
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn service_status() -> Result<()> {
+    let uid = unsafe { libc::getuid() };
+    let service_target = format!("gui/{}/{}", uid, LAUNCHD_LABEL);
+    let output = std::process::Command::new("launchctl")
+        .args(["print", &service_target])
+        .output()?;
+
+    if output.status.success() {
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+    } else {
+        println!("Service {} is not loaded.", LAUNCHD_LABEL);
+        if !output.stderr.is_empty() {
+            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 fn is_root() -> bool {
-    true
+    unsafe { libc::geteuid() == 0 }
 }
 
 fn run_cmd(cmd: &str, args: &[&str]) -> Result<()> {

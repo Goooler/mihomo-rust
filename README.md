@@ -144,7 +144,9 @@ cp config.example.yaml config.yaml
 ./target/release/mihomo -f config.yaml -t
 ```
 
-### Install as systemd service (Linux)
+### Install as system service
+
+**Linux (systemd):**
 
 ```bash
 sudo ./target/release/mihomo install -f /path/to/config.yaml
@@ -156,6 +158,24 @@ sudo journalctl -u mihomo -f
 
 # Uninstall
 sudo ./target/release/mihomo uninstall
+```
+
+**macOS (launchd user agent):**
+
+```bash
+./target/release/mihomo install -f /path/to/config.yaml
+
+# Config is copied to ~/Library/Application Support/mihomo/config.yaml
+# Logs are written to ~/Library/Logs/mihomo/
+
+# Check status
+./target/release/mihomo status
+
+# View logs
+tail -f ~/Library/Logs/mihomo/mihomo.log
+
+# Uninstall
+./target/release/mihomo uninstall
 ```
 
 ### Open the Web UI

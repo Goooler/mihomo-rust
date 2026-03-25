@@ -23,7 +23,7 @@ fn test_raw_config() -> RawConfig {
         external_controller: None,
         secret: None,
         dns: None,
-        tun: None,
+
         proxies: None,
         proxy_groups: None,
         rules: Some(vec![
