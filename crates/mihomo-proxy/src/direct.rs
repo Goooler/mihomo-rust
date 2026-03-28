@@ -115,7 +115,7 @@ async fn connect_with_mark(addr: &str, routing_mark: Option<u32>) -> std::io::Re
         match socket.connect(&dest.into()) {
             Ok(()) => {}
             Err(e) if e.raw_os_error() == Some(libc::EINPROGRESS) => {}
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(e),
         }
 
         let std_stream: std::net::TcpStream = socket.into();
