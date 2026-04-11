@@ -1,6 +1,6 @@
 # 24-Hour Soak Test Plan (M1 Exit Gate)
 
-Status: **draft** — owner: qa. Last updated: 2026-04-11.
+Status: **abandoned** — skipped by decision 2026-04-11. 24h soak replaced with manual real-subscription smoke test at M1 exit.
 
 Per `vision.md` §M1 and `roadmap.md` §"M1 exit criteria", M1 is declared
 complete when *"a representative real-world Clash Meta subscription loads,

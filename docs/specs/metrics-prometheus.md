@@ -1,6 +1,6 @@
 # Spec: Prometheus metrics endpoint (M1.H-2)
 
-Status: Draft
+Status: Approved (architect 2026-04-11)
 Owner: pm
 Tracks roadmap item: **M1.H-2**
 Depends on: none beyond existing `Statistics` struct and Axum router.
@@ -74,12 +74,12 @@ scrape_configs:
 
 All metrics are prefixed `mihomo_`.
 
-| Metric name | Type | Labels | Description |
-|-------------|------|--------|-------------|
-| `mihomo_traffic_bytes_total` | counter | `direction={upload,download}` | Cumulative bytes transferred since process start. |
+| Registered name | Type | Labels | Description |
+|-----------------|------|--------|-------------|
+| `mihomo_traffic_bytes` | counter | `direction={upload,download}` | Cumulative bytes transferred since process start. `prometheus-client` auto-appends `_total`; wire label as a single metric with `direction` label. |
 | `mihomo_connections_active` | gauge | — | Number of currently open connections. |
 | `mihomo_proxy_alive` | gauge | `proxy_name`, `adapter_type` | 1 = alive, 0 = dead. One series per configured proxy/group. |
-| `mihomo_proxy_delay_ms` | gauge | `proxy_name`, `adapter_type` | Last measured round-trip delay in milliseconds. -1 if unknown. |
+| `mihomo_proxy_delay_ms` | gauge | `proxy_name`, `adapter_type` | Last measured round-trip delay in milliseconds. **Omitted entirely when `last_delay = None`** (no health check has run). NOT -1. |
 | `mihomo_rules_matched_total` | counter | `rule_type`, `action` | Cumulative rule matches by type and action. |
 | `mihomo_memory_rss_bytes` | gauge | — | Current process RSS in bytes (from sysinfo). |
 | `mihomo_info` | gauge | `version`, `mode` | Always 1; carries build-time labels (version string, tunnel mode). |
@@ -94,16 +94,25 @@ All metrics are prefixed `mihomo_`.
 - `action`: `"DIRECT"`, `"REJECT"`, `"PROXY"` (for all non-direct/non-reject
   actions, use `"PROXY"`).
 
+**High-cardinality note**: `mihomo_proxy_alive` and `mihomo_proxy_delay_ms` emit
+one series per proxy/group (O(num_proxies)). A typical subscription has 20–500
+proxies. This is the expected cardinality for this endpoint; operators running
+large subscriptions (500+) should be aware that per-scrape encoding cost scales
+linearly. Per-connection labels are intentionally excluded (unbounded cardinality).
+
 **`mihomo_rules_matched_total` instrumentation**: requires a new
 `RuleMatchCounters` struct in `mihomo-tunnel/src/statistics.rs` with a
-`DashMap<(RuleType, String /*action*/), AtomicU64>`. The tunnel's
-`match_engine.rs` increments the counter at each rule match. This is the
-only new hot-path instrumentation in M1.
+`DashMap<(&'static str, &'static str), u64>`. Keys are `&'static str` (not
+`String`) — `increment()` is on the hot path (called per connection); owned
+`String` keys allocate on every call. Rule type and action strings must be
+`'static` constants. The tunnel's `match_engine.rs` increments the counter at
+each rule match. This is the only new hot-path instrumentation in M1.
 
-**`mihomo_proxy_delay_ms` value `-1`**: used when `proxy.health().last_delay()`
-is `None` (no health check completed yet). The Prometheus data model allows
-negative gauge values; this is preferable to omitting the series (which would
-cause alert gaps).
+**`mihomo_proxy_delay_ms` omit-when-None**: when `proxy.health().last_delay()`
+is `None` (no health check has run), do NOT emit a series at all — not even
+`-1`. A `-1` gauge value pollutes aggregations (`avg`, `histogram_quantile`).
+Absence is the correct signal: alert rules should use `absent()` or `unless`
+to detect stale proxies rather than testing for a sentinel value.
 
 ## Internal design
 
@@ -163,17 +172,19 @@ intervals (15–60s) the allocation overhead is negligible.
 // crates/mihomo-tunnel/src/statistics.rs
 
 pub struct RuleMatchCounters {
-    /// (rule_type_string, action_string) → count
-    inner: DashMap<(String, String), u64>,
+    /// (&'static str rule_type, &'static str action) → count
+    /// Keys are 'static to avoid per-call allocation on the hot path.
+    inner: DashMap<(&'static str, &'static str), u64>,
 }
 
 impl RuleMatchCounters {
-    pub fn increment(&self, rule_type: &str, action: &str) {
-        *self.inner.entry((rule_type.to_owned(), action.to_owned()))
-            .or_insert(0) += 1;
+    /// rule_type and action MUST be 'static string literals (e.g. "DOMAIN", "PROXY").
+    /// Do NOT pass runtime-allocated strings here.
+    pub fn increment(&self, rule_type: &'static str, action: &'static str) {
+        *self.inner.entry((rule_type, action)).or_insert(0) += 1;
     }
-    pub fn snapshot(&self) -> Vec<((String, String), u64)> {
-        self.inner.iter().map(|e| (e.key().clone(), *e.value())).collect()
+    pub fn snapshot(&self) -> Vec<((&'static str, &'static str), u64)> {
+        self.inner.iter().map(|e| (*e.key(), *e.value())).collect()
     }
 }
 ```
@@ -216,7 +227,8 @@ API and define their own metric names.
 4. `mihomo_connections_active` matches the count from `GET /connections`.
 5. `mihomo_proxy_alive` has one series per proxy/group; value is 1 for alive,
    0 for dead. Label `proxy_name` matches the name from `GET /proxies`.
-6. `mihomo_proxy_delay_ms` present for all proxies; -1 when delay unknown.
+6. `mihomo_proxy_delay_ms` present for proxies with a known delay; **absent** for
+   proxies where no health check has run (`last_delay = None`). NOT -1, NOT 0.
 7. `mihomo_rules_matched_total` increments after each proxied connection.
    Unit test: route one connection through a DOMAIN rule → counter increases by 1.
 8. `mihomo_memory_rss_bytes` is a positive integer.
@@ -238,8 +250,10 @@ API and define their own metric names.
   statistics; assert `mihomo_connections_active` = 3.
 - `metrics_proxy_alive_label_per_proxy` — mock tunnel with 2 proxies (one alive,
   one dead); assert two series, correct values.
-- `metrics_proxy_delay_minus_one_when_unknown` — proxy with `last_delay = None`;
-  assert `mihomo_proxy_delay_ms = -1`. NOT absent, NOT 0.
+- `metrics_proxy_delay_absent_when_unknown` — proxy with `last_delay = None`;
+  assert NO `mihomo_proxy_delay_ms` series emitted for that proxy. NOT -1, NOT 0.
+  Upstream: N/A (mihomo-rust enhancement). Omitting series is correct Prometheus
+  practice; sentinel values corrupt aggregations.
 - `metrics_info_label_always_one` — assert `mihomo_info` = 1 with version label.
 - `metrics_auth_required` — no Bearer token → 401. Same as other REST routes.
 

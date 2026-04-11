@@ -14,6 +14,7 @@ The following upstream features are **intentionally out of scope** for `mihomo-r
 
 - **fake-ip DNS mode** — removed in commit `812f3c6`. `enhanced-mode: fake-ip` will log a warning and fall back to `normal`.
 - **tun vpn / tun inbound** — we do not ship an in-process TUN device or sing-tun integration. Transparent proxy is served via `tproxy` (nftables/pf) only.
+- **VMess outbound** — dropped from M1 scope 2026-04-11. Protocol complexity (AEAD KDF, auth-id cache, legacy cipher quirks) for diminishing returns as modern users have migrated to VLESS. Spec preserved in `docs/specs/proxy-vmess.md` as a design record. Use VLESS instead.
 
 ---
 
@@ -30,7 +31,7 @@ Upstream lives in `adapter/outbound/`. Current Rust adapters live in `crates/mih
 | Shadowsocks     | Yes      | Yes       | OK      | Built on the `shadowsocks` crate |
 | ShadowsocksR    | Yes      | No        | **Gap** | Legacy; low priority |
 | Trojan          | Yes      | Yes       | OK      | Includes rustls TLS |
-| VMess           | Yes      | No        | **Gap** | High priority — widely used |
+| VMess           | Yes      | No        | **Excluded** | Dropped from M1 2026-04-11 — use VLESS. Spec preserved as design record. |
 | VLESS           | Yes      | No        | **Gap** | High priority; includes XTLS/Reality upstream |
 | Snell           | Yes      | No        | **Gap** | Medium priority |
 | Hysteria v1     | Yes      | No        | **Gap** | Medium priority, QUIC-based |
@@ -298,7 +299,7 @@ These surfaced during the audit and warrant engineer follow-up even before new f
 
 High-impact items the PM should consider first for the roadmap:
 
-1. **VMess + VLESS outbound** — the two most commonly shared subscription protocols. Probably M1.
+1. **VLESS outbound** — the primary modern subscription protocol. VMess dropped from M1 (2026-04-11); VLESS carries M1.B priority alone.
 2. **Load-balance and Relay groups** — small, self-contained, unlocks real-world configs.
 3. **Reusable transport layer (ws, grpc, h2, tls)** — prerequisite for effective VMess/VLESS/Trojan feature parity.
 4. **REST API completeness**: `auth`, `delay` endpoints, `logs`/`memory` websockets, `providers/*`. Required by Clash Dashboard / Yacd / ClashX compat.

@@ -1,6 +1,6 @@
 # Spec: Unified named listeners (M1.F-1)
 
-Status: Draft
+Status: Approved (architect 2026-04-11)
 Owner: pm
 Tracks roadmap item: **M1.F-1**
 Blocks: M1.D-4 (IN-TYPE, IN-NAME, IN-USER rules — need `Metadata.in_name` populated).
@@ -39,7 +39,7 @@ In scope:
 5. Wire `Metadata.in_name` and `Metadata.in_port` in all four listener
    implementations (`mixed.rs`, `http_proxy.rs`, `socks5.rs`, `tproxy/`).
 6. Expose listener list in `GET /listeners` REST endpoint (simple list of
-   name, type, port, alive).
+   name, type, port, listen).
 7. `IN-NAME` and `IN-PORT` rules (already in the rule enum) now function
    correctly because Metadata carries the listener name and port.
 8. `IN-TYPE` rule: maps listener `type` field to Metadata.conn_type categories.
@@ -164,6 +164,8 @@ logic changes.
 | `INNER` | `ConnType::Inner` (tunnel-internal) |
 
 Unknown `IN-TYPE` value → hard parse error (Class A).
+
+**IN-TYPE,HTTP vs IN-TYPE,HTTPS:** `IN-TYPE,HTTP` is a superset that matches both plain HTTP and HTTPS connections detected by the listener. Use `IN-TYPE,HTTPS` to match only HTTPS. A rule `IN-TYPE,HTTP,Reject` will accidentally block HTTPS traffic — use `IN-TYPE,HTTPS` or `IN-TYPE,HTTPS` + `IN-TYPE,HTTP` split rules if the intent is to block plaintext only.
 
 ### GET /listeners
 

@@ -68,11 +68,11 @@ Deploys `docs/` to GitHub Pages on pushes to `main`. Not test-gating.
 | MSRV check | `cargo check` on pinned `rust-version` | Yes |
 | Dependency advisories | `rustsec/audit-check` | Yes (weekly + lockfile changes) |
 | Release artifacts | `release.yml` musl matrix | Yes (on `v*` tags) |
-| **24h soak (M1 exit gate)** | `docs/soak-test-plan.md` — harness not yet built | **No** (task #25, blocked on M1 feature-complete) |
+| ~~24h soak (M1 exit gate)~~ | `docs/soak-test-plan.md` — **abandoned 2026-04-11**; replaced with manual real-subscription smoke test at M1 exit | Out of scope for M1 |
 
 ## Baseline
 
-`cargo test --lib` on 2026-04-11: **66 passed, 0 failed, 0 ignored** across 10 crates (mihomo-proxy 28, mihomo-rules 10, mihomo-config 9, mihomo-dns 7, mihomo-trie 6, mihomo-common 6; tunnel/api/app/listener crates have no lib tests).
+`cargo test --lib` on 2026-04-11 (updated): **100 passed, 0 failed, 0 ignored** across 10 crates (mihomo-proxy 37, mihomo-rules 18, mihomo-config 18, mihomo-dns 8, mihomo-trie 6, mihomo-tunnel 3, mihomo-common 3; api/app/listener crates have no lib tests). `api_test` integration suite: **82 passed, 0 failed**.
 
 ## Gaps
 
@@ -115,4 +115,4 @@ Deploys `docs/` to GitHub Pages on pushes to `main`. Not test-gating.
 
 ### Outstanding (non-CI testing work)
 
-- **24h soak harness (task #25)** — drafted in `docs/soak-test-plan.md`. Blocked on M1 feature-complete and on engineer prerequisites #26 (panic-abort behavior), #27 (`/debug/state` endpoint), #28 (conn-table drain verification).
+- ~~**24h soak harness**~~ — **out of scope for M1** (decision 2026-04-11). `docs/soak-test-plan.md` retained as a record. Tasks #26 (panic-abort), #27 (`/debug/state`), #28 (conn-table drain) remain as independent hygiene items.

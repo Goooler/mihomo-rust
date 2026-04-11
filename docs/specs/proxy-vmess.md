@@ -1,6 +1,11 @@
 # Spec: VMess outbound
 
-Status: Draft (pm 2026-04-11, awaiting architect review)
+> **Status: DROPPED** — excluded from M1 scope by decision 2026-04-11.
+> Preserved as a design record in case VMess is revisited in a future milestone.
+> Do not implement against this spec without a new product decision reversing
+> the drop. See `docs/roadmap.md` §M1.B for rationale.
+
+Status: Draft (pm 2026-04-11, awaiting architect review) — *superseded by drop decision above*
 Owner: pm
 Tracks roadmap item: **M1.B-1**
 Depends on: **M1.A-1** (tls layer), **M1.A-2** (ws layer); gRPC/H2/HTTPUpgrade

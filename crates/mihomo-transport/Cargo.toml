@@ -1,0 +1,77 @@
+[package]
+name = "mihomo-transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Reusable composable stream-transport layers (TLS, WS, gRPC, H2, HTTPUpgrade) for mihomo-rust"
+
+# ADR-0001: this crate is a leaf — no dep on mihomo-proxy / mihomo-dns / mihomo-config.
+# `cargo tree -p mihomo-transport` must show only `mihomo-common` from our workspace.
+
+[features]
+default = ["tls", "ws"]
+tls = [
+    "dep:tokio-rustls",
+    "dep:rustls",
+    "dep:webpki-roots",
+    "dep:rustls-pemfile",
+]
+ws = [
+    "dep:tokio-tungstenite",
+    "dep:futures-util",
+    "dep:base64",
+]
+grpc = [
+    "dep:h2",
+    "dep:http",
+    "dep:rand",
+]
+h2 = [
+    "dep:h2",
+    "dep:http",
+    "dep:rand",
+]
+httpupgrade = [
+    "dep:httparse",
+]
+
+[dependencies]
+mihomo-common = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+
+# tls feature
+tokio-rustls    = { workspace = true, optional = true }
+rustls          = { workspace = true, optional = true }
+webpki-roots    = { workspace = true, optional = true }
+rustls-pemfile  = { version = "2", optional = true }
+
+# ws feature
+tokio-tungstenite = { workspace = true, optional = true }
+futures-util      = { workspace = true, optional = true }
+base64            = { workspace = true, optional = true }
+
+# grpc + h2 features (share the h2 crate; see ADR-0001 §5 note on intentional dep sharing)
+h2   = { version = "0.4", optional = true }
+http = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
+
+# httpupgrade feature
+httparse = { version = "1", optional = true }
+
+[dev-dependencies]
+tokio        = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls       = { workspace = true }
+rustls-pemfile = "2"
+rcgen        = "0.13"
+# Log-capture strategy: home-rolled MakeWriter in tests/support/log_capture.rs using
+# tracing_subscriber scoped subscribers, documented there.  tracing-test is NOT used
+# because it installs a process-global subscriber that cross-contaminates parallel test
+# binaries (each test file in tests/ is a separate binary).
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+regex = { workspace = true }
+base64 = { workspace = true }

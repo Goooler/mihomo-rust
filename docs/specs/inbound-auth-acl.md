@@ -1,6 +1,6 @@
 # Spec: Inbound authentication and LAN ACLs (M1.F-3)
 
-Status: Draft
+Status: Approved (architect 2026-04-11)
 Owner: pm
 Tracks roadmap item: **M1.F-3**
 Depends on: none — inbound auth is independent of named listeners (M1.F-1),
@@ -92,7 +92,7 @@ loopback from the bypass (it would break local tooling).
 | 1 | Malformed `user:pass` entry (no colon) — upstream silently ignores | A | Hard parse error. An entry with no `:` is almost certainly a typo. |
 | 2 | Empty password (`user:`) — upstream accepts | B | Warn-once at parse time. Empty passwords are valid but unusual; user may have made a config error. |
 | 3 | SOCKS5 method 0xFF (no acceptable method) returned when auth required but not offered | — | We match upstream: if client does not offer method 0x02 when credentials are required, reply `[0x05, 0xFF]` and close. |
-| 4 | HTTP `Proxy-Authorization` on non-CONNECT request — upstream checks | B | We check only on CONNECT. Non-CONNECT plain HTTP requests are M2 (body parsing). If auth is configured, non-CONNECT HTTP requests without CONNECT upgrade are rejected with 407. |
+| 4 | HTTP `Proxy-Authorization` on all forward proxy requests — upstream checks | — | We check `Proxy-Authorization` on both CONNECT and non-CONNECT forward proxy requests. The listener already parses the first request line to distinguish CONNECT from forward proxy; auth check adds ~10 lines at that branch point. This matches upstream. |
 
 ## Internal design
 
@@ -133,10 +133,19 @@ comparison to prevent timing attacks. Use `subtle::ConstantTimeEq` or a
 simple constant-time byte compare.
 
 ```rust
-// Constant-time compare via iterating all bytes
-fn constant_time_eq(a: &str, b: &str) -> bool {
-    if a.len() != b.len() { return false; }
-    a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+// Use subtle::ConstantTimeEq — do not use a manual loop.
+// Note: HashMap lookup of username is not constant-time (leaks user-exists
+// vs user-missing via timing); a constant-time user lookup would require
+// linear scan over all credentials. We accept this limitation for M1:
+// auth is over TCP with variable network jitter that dwarfs lookup timing.
+fn verify(credentials: &HashMap<String, String>, username: &str, password: &str) -> bool {
+    match credentials.get(username) {
+        Some(stored) => {
+            use subtle::ConstantTimeEq;
+            stored.as_bytes().ct_eq(password.as_bytes()).into()
+        }
+        None => false,
+    }
 }
 ```
 
@@ -172,6 +181,8 @@ The check happens after TCP accept and before the proxy handshake:
 ```
 
 **TProxy:** no auth. `metadata.in_user = None`.
+
+**TProxy connections bypass auth unconditionally**, regardless of `skip-auth-prefixes`. Transparent proxy has no mechanism for the client to send `Proxy-Authorization` — it is assumed the operator gates TProxy at the kernel/netfilter level. `Metadata.in_user` is always `None` for TProxy connections.
 
 ### Metadata
 

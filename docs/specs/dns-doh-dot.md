@@ -285,8 +285,17 @@ Algorithm:
      **bootstrapped IP** (step 4) or the literal IP, never from the
      hostname — hickory won't re-resolve it.
 6. **Build fallback resolver** the same way if non-empty.
-7. Return `Resolver { main, fallback, cache, mode, hosts, inflight }`
-   (no struct changes).
+7. Return `Resolver { main, fallback, cache, mode, hosts, inflight }`.
+
+**`main: Vec<TokioResolver>`** — this PR changes `Resolver.main` from a single
+`TokioResolver` to `Vec<TokioResolver>` (one per configured nameserver). Parallel
+dispatch across all entries uses `futures::future::select_ok` — the first
+successful response wins; remaining in-flight requests are dropped. This is the
+same model as `nameserver-policy:` parallel dispatch (M1.E-3); the struct
+change **must land in M1.E-1** so M1.E-3 can build on it without a second
+breaking refactor of `Resolver`. `fallback` similarly becomes `Vec<TokioResolver>`.
+Add `futures = { workspace = true }` to `crates/mihomo-dns/Cargo.toml` if not
+already present.
 
 ### Error surface
 

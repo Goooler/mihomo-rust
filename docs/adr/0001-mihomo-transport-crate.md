@@ -39,8 +39,8 @@ mihomo-proxy  (Direct, Reject, SS, Trojan, VMess, VLESS — composes transports)
 use tokio::io::{AsyncRead, AsyncWrite};
 
 /// A duplex byte stream produced by a transport layer.
-pub trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
-impl<T: AsyncRead + AsyncWrite + Unpin + Send> Stream for T {}
+pub trait Stream: AsyncRead + AsyncWrite + Unpin + Send + Sync {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send + Sync> Stream for T {}
 
 /// A transport layer wraps an inner `Stream` and produces a new `Stream`.
 /// Layers compose: `tls.connect(tcp)`, `ws.connect(tls.connect(tcp))`, …
@@ -49,6 +49,12 @@ pub trait Transport: Send + Sync {
     async fn connect(&self, inner: Box<dyn Stream>) -> Result<Box<dyn Stream>>;
 }
 ```
+
+**Addendum 2026-04-11 (M1.A-1 review):** the `+ Sync` bound was added
+after the initial ADR draft because `mihomo-proxy::ProxyConn` requires
+`Sync` for connection-table access. Every concrete stream type we use
+(`TcpStream`, `TlsStream`, `WebSocketStream`) is already `Sync`, so
+the bound is free in practice.
 
 Why a trait-object boundary at `Box<dyn Stream>` rather than generics:
 

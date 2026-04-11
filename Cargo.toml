@@ -5,6 +5,7 @@ members = [
     "crates/mihomo-trie",
     "crates/mihomo-dns",
     "crates/mihomo-rules",
+    "crates/mihomo-transport",
     "crates/mihomo-proxy",
     "crates/mihomo-tunnel",
     "crates/mihomo-listener",
@@ -116,6 +117,7 @@ mihomo-common = { path = "crates/mihomo-common" }
 mihomo-trie = { path = "crates/mihomo-trie" }
 mihomo-dns = { path = "crates/mihomo-dns" }
 mihomo-rules = { path = "crates/mihomo-rules" }
+mihomo-transport = { path = "crates/mihomo-transport" }
 mihomo-proxy = { path = "crates/mihomo-proxy" }
 mihomo-tunnel = { path = "crates/mihomo-tunnel" }
 mihomo-listener = { path = "crates/mihomo-listener" }

@@ -1,6 +1,6 @@
 # Spec: DNS nameserver-policy and fallback-filter (M1.E-3, M1.E-4)
 
-Status: Draft
+Status: Approved (architect 2026-04-11)
 Owner: pm
 Tracks roadmap items: **M1.E-3** (nameserver-policy), **M1.E-4** (fallback-filter)
 Depends on: M1.E-1/E-2 (`dns-doh-dot.md`) — nameserver URL parser reused here.
@@ -111,9 +111,11 @@ Field reference — `fallback-filter`:
 |---|------|:-----:|-----------|
 | 1 | `geosite:`/`rule-set:` patterns in nameserver-policy — upstream supports | B | Deferred to M1.x. Unknown-prefix patterns (not `+.` or bare domain) produce a warn-once at parse time and are skipped. NOT hard error — too many real configs use these. |
 | 2 | `dhcp://` nameserver — upstream supports | B | Warn-once at parse time; entry skipped. |
-| 3 | `fallback-filter.geoip: true` with no MMDB — upstream errors at startup | A | We treat as `geoip: false` with `warn!`. Single-resolver configs are valid without a GeoIP DB. NOT a startup error. |
-| 4 | nameserver-policy entry with no valid nameservers (all skipped) → upstream panics | A | Policy entry with all-skipped nameservers falls through to global `nameservers`. Log `warn!` per entry at parse time. NOT a hard error. |
+| 3 | `fallback-filter.geoip: true` with no MMDB — upstream errors at startup | B | We treat as `geoip: false` with `warn!`. Single-resolver configs are valid without a GeoIP DB. NOT a startup error. |
+| 4 | nameserver-policy entry with no valid nameservers (all skipped) → upstream panics | A | Hard parse error: "nameserver-policy entry 'KEY' has no valid nameservers after skipping unsupported prefixes." A policy entry with zero valid nameservers silently routes the configured domain to global nameservers — a potential DNS leakage for internal/corporate domains. Fail loudly. |
 | 5 | fallback-filter `domain` patterns use the same `+.` syntax as nameserver-policy — upstream uses plain glob | — | We match: `+.google.cn` means `google.cn` and all subdomains. Consistent with nameserver-policy patterns. |
+
+**Upstream naming note:** upstream Go mihomo calls a similar concept `fake-ip-filter` in some contexts (for the nameserver-policy domain-bypass feature). Our `fallback-filter.domain` is the equivalent mechanism. Users grepping upstream terminology should be aware of this naming difference.
 
 ## Internal design
 
@@ -231,8 +233,11 @@ configured. This is a breaking change to the Resolver constructor — update
 
 **Parallel resolution**: when multiple servers exist in a pool (global or policy),
 send the query to all in parallel and return the first successful response.
-Cancel the losers. Use `tokio::select!` over `FuturesUnordered`.
-This matches upstream Go mihomo's parallel dispatch behaviour.
+Use `futures::future::select_ok` — it returns the first `Ok` result and
+cancels remaining futures, but continues waiting if an individual future returns
+`Err` (SERVFAIL from one server doesn't short-circuit the pool). This matches
+upstream Go mihomo's parallel dispatch and avoids the error-vs-success filtering
+boilerplate of a manual `FuturesUnordered` loop.
 
 ## Acceptance criteria
 
@@ -312,15 +317,20 @@ This matches upstream Go mihomo's parallel dispatch behaviour.
 - [ ] Wire new lookup flow in `do_lookup()` (policy → global → fallback, with filter).
 - [ ] Update `docs/roadmap.md` M1.E-3 and M1.E-4 rows with merged PR link.
 
-## Open questions (for architect review)
+## Resolved questions (architect sign-off 2026-04-11)
 
-1. **Parallel dispatch implementation**: `FuturesUnordered` + `tokio::select!` vs
-   `futures::future::select_ok`. Which is preferred for cancelling losers?
-2. **fallback-filter applied to policy nameservers**: should the filter also gate
-   policy results (sketched above as yes), or only global nameserver results?
-   Upstream gates both; I've matched that — confirm?
-3. **Re-filtering fallback results**: spec says we trust fallback results and
-   do not re-apply the filter. Is this correct?
-4. **`main` Vec→parallel change**: this is a breaking change to `Resolver::new()`.
-   Does M1.E-1 (DoH/DoT) land before this spec, or does this PR retrofit M1.E-1's
-   changes too?
+1. **Parallel dispatch: use `futures::future::select_ok`** — purpose-built for
+   "first success wins, cancel losers" semantics. See §Parallel resolution.
+
+2. **fallback-filter gates both policy and global nameserver results** — confirmed
+   correct. A policy nameserver can be poisoned just as easily as a global one.
+
+3. **Fallback results are not re-filtered** — confirmed correct. Fallback is the
+   user's explicitly-configured trusted alternate; re-filtering would create a
+   rejection loop if both pools trip the same GeoIP/CIDR check.
+
+4. **`Vec<TokioResolver>` change lands in M1.E-1, not this spec.** The M1.E-1
+   (dns-doh-dot) spec is patched to land `main: Vec<TokioResolver>` with parallel
+   `select_ok` dispatch; single-nameserver configs produce a Vec of length 1
+   transparently. This spec (M1.E-3) is then purely additive with no
+   `Resolver::new()` constructor churn.

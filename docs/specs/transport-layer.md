@@ -114,20 +114,42 @@ builds the `TlsConfig` and hands it to the layer constructor — the
 crate boundary rule from ADR-0001 §1 says `mihomo-transport` never sees
 YAML.
 
-**Fingerprint warn text** (verbatim, architect-approved):
+**SNI resolution (canonical, amended 2026-04-11 after M1.A-1 review):**
+`mihomo-config` resolves `TlsConfig.sni` before construction:
+
+| YAML `servername:` | YAML `server:` | `TlsConfig.sni`      |
+|--------------------|----------------|----------------------|
+| set                | any            | `Some(servername)`   |
+| unset              | hostname       | `Some(hostname)`     |
+| unset              | IP literal     | `Some("1.2.3.4")`    |
+
+For the IP-literal case, `sni = Some("1.2.3.4")` — **not** `None`.
+`rustls::pki_types::ServerName::try_from("1.2.3.4")` produces the
+`IpAddress` variant, which rustls uses for certificate verification
+but does **not** include in the TLS SNI extension (RFC 6066 §3
+prohibits IP literals in SNI). This keeps `TlsLayer::new` able to
+enforce the invariant `enabled → sni.is_some()` and return
+`TransportError::Config` on `None`. (Engineer's M1.A-1 impl diverged
+from my earlier Q2 guidance in this direction; the divergence is
+correct and becomes canonical.)
+
+**Fingerprint warn text** (verbatim, architect-approved — amended
+2026-04-11 during M1.A-1 review to drop the `"on proxy <name>"`
+phrase; `TlsConfig` does not carry a proxy name and adding one purely
+for log text would leak identity into the transport crate):
 
 ```
-client-fingerprint="<value>" set on proxy "<name>": \
+client-fingerprint="<value>" set on proxy: \
 uTLS fingerprint spoofing is not implemented; \
 TLS handshake will use rustls defaults. \
-See https://github.com/<owner>/mihomo-rust/issues/<issue-number> \
+See https://github.com/mihomo-rust/mihomo-rust/issues/32 \
 for real uTLS support.
 ```
 
 Dedup by distinct `<value>` so a config with 50 vmess proxies all
-using `chrome` logs the warning exactly once. The issue number is
-filed as task #32 (file the uTLS tracking issue); engineer substitutes
-the real issue number at implementation time.
+using `chrome` logs the warning exactly once. Including the proxy
+name would be misleading anyway — dedup is by value, so only the
+first offending proxy's name would appear.
 
 ### `ws` (WebSocket)
 
@@ -220,9 +242,11 @@ because an Nth-connection-always-hits-host-N-mod-M pattern leaks a
 fingerprint to on-path observers; the whole point of h2 + multi-host is
 browser-style camouflage.
 
-Adds `rand = { version = "0.8", default-features = false, features =
-["std"] }` as a dep under the `h2` feature gate. Already in the
-dependency tree via `rustls`, so zero footprint cost.
+Use `rand.workspace = true` under the `h2`/`grpc` feature gates — the
+workspace already pins `rand = "0.9"`. `SliceRandom::choose` is
+unchanged across 0.8→0.9 for our call site. Already in the dependency
+tree via `rustls`, so zero footprint cost. (Architect correction,
+2026-04-11, answering engineer Q3 — earlier "0.8" text was stale.)
 
 ### `httpupgrade`
 
@@ -287,18 +311,32 @@ pub enum TransportError {
 ```
 
 Adapters (VMess, VLESS, Trojan) convert `TransportError` into
-`MihomoError::Proxy(...)` at the crate boundary. There is **one**
-`From<TransportError> for MihomoError` impl and it lives in
-`crates/mihomo-common/src/error.rs` behind a `#[cfg(feature =
-"transport-error")]` gate — `mihomo-common` adds an optional dep on
-`mihomo-transport` solely for that conversion (`default-features =
-false` to avoid pulling rustls/h2/etc. through `mihomo-common`).
-Alternative: if the cyclic-dep optics bother the engineer, implement
-the `From` in `mihomo-proxy` instead, where both types are already in
-scope. Architect to pick one at implementation time; the spec only
-requires that **no adapter constructs `TransportError` variants by
-hand and no `anyhow::Error` ever crosses the `mihomo-transport`
-boundary**.
+`MihomoError::Proxy(...)` at the crate boundary. The conversion lives
+in `mihomo-proxy` (not in `mihomo-common` or `mihomo-transport`),
+preserving ADR-0001 §1's leaf-crate rule.
+
+**Form: free function, not `From` impl.** The orphan rule blocks
+`impl From<TransportError> for MihomoError` in `mihomo-proxy` because
+both types are foreign to that crate. The canonical shape is:
+
+```rust
+// crates/mihomo-proxy/src/lib.rs
+pub(crate) fn transport_to_proxy_err(e: TransportError) -> MihomoError {
+    MihomoError::Proxy(e.to_string())
+}
+```
+
+Call sites use `.map_err(transport_to_proxy_err)?` instead of `?`. The
+ergonomic cost is trivial and grep-ability is higher than a `From`
+impl would be. (Architect decision 2026-04-11, answering engineer Q1
+and correcting an earlier suggestion that assumed the `From` impl
+could live in `mihomo-proxy` — the orphan rule says otherwise.)
+
+Invariants the review enforces: **no adapter constructs
+`TransportError` variants by hand, and no `anyhow::Error` ever crosses
+the `mihomo-transport` boundary**. The crate-invariants test suite
+(`tests/crate_invariants_test.rs`) enforces the second one
+mechanically via a grep over `src/`.
 
 The transport crate itself never constructs `MihomoError`.
 

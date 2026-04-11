@@ -132,9 +132,13 @@ Candidate scope (to be confirmed after gap analysis):
 - **Docs:** migration guide from Go mihomo, pointing out the config fields
   we honor and the ones we intentionally don't.
 
-Exit criteria: a representative real-world Clash Meta subscription loads,
-routes traffic correctly, and survives a 24h soak test without leaks or
-panics.
+Exit criteria (revised 2026-04-11): all M1.A–H specs implemented and
+merged; all M1 test plans pass under `cargo test`; workspace builds clean
+on Ubuntu + macOS CI; manual smoke test with one real Clash Meta
+subscription running ≥ 1 hour without panics or functional regressions;
+CI green on main for at least 24 hours before the release tag. (The
+automated 24h synthetic soak was dropped — see `docs/roadmap.md` §M1
+exit criteria for rationale.)
 
 ### M2 — Performance and footprint (target: after M1)
 

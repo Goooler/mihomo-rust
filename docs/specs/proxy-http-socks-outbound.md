@@ -1,6 +1,6 @@
 # Spec: HTTP CONNECT and SOCKS5 outbound adapters (M1.B-3, M1.B-4)
 
-Status: Draft
+Status: Approved (architect 2026-04-11)
 Owner: pm
 Tracks roadmap items: **M1.B-3** (HTTP CONNECT outbound), **M1.B-4** (SOCKS5 outbound)
 Depends on: `mihomo-transport` crate (M1.A) for TLS-wrapping support.
@@ -88,6 +88,8 @@ Field reference — HTTP:
 | `skip-cert-verify` | bool | no | `false` | Skip TLS certificate verification. Only used when `tls: true`. |
 | `headers` | map[str]str | no | `{}` | Extra headers injected into the CONNECT request. |
 
+**Note:** `headers:` entries are injected into the CONNECT request only. After the tunnel is established, the payload is opaque bytes — there is no mechanism to inject headers into tunnelled HTTP traffic.
+
 Field reference — SOCKS5:
 
 | Field | Type | Required | Default | Meaning |
@@ -108,7 +110,6 @@ Field reference — SOCKS5:
 | 1 | SOCKS5 UDP ASSOCIATE — upstream supports | B | Deferred to M1.x. `udp: true` is accepted and ignored with a warn-once. `dial_udp()` returns `UdpNotSupported`. |
 | 2 | HTTP auth schemes other than Basic — upstream supports Digest | B | M1 supports Basic only. Unknown auth-required response from proxy → `Err(ProxyAuthFailed)`. |
 | 3 | Both `username` and `password` must be set — upstream allows password-only | A | If only one of `username`/`password` is set, hard parse error. An orphaned credential is almost certainly a config mistake. |
-| 4 | SOCKS4/4a — upstream falls through to SOCKS5 detection | A | Not supported. If a user somehow wires SOCKS4, hard parse error at config load. |
 
 ## Internal design
 
@@ -147,6 +148,7 @@ both `HTTP/1.0` and `HTTP/1.1`. Extract status code as u16.
    — auth configured:    nmethods=2, methods=[0x00, 0x02]
    recv: [0x05, chosen_method]
    — chosen_method = 0xFF → Err(NoAcceptableMethod)
+   — chosen_method = 0x00 → proceed without auth sub-negotiation (even if credentials configured; server chose no-auth)
 4. if chosen_method = 0x02 (username/password):
    send: [0x01, ulen, user..., plen, pass...]
    recv: [0x01, status]  — status 0x00 = success, else Err(ProxyAuthFailed)
@@ -201,6 +203,8 @@ MihomoError::Socks5ConnectFailed(u8),  // non-zero rep from SOCKS5
 MihomoError::NoAcceptableMethod,       // SOCKS5 server returned 0xFF
 ```
 
+Error log messages must include a protocol prefix so debugging is unambiguous: log `"http proxy auth failed"` (not generic `"auth failed"`) for HTTP 407, and `"socks5 auth failed"` for SOCKS5 auth rejection.
+
 ### `connect_over` on `HttpAdapter` and `Socks5Adapter`
 
 The `connect_over` method (added by M1.B-1 VMess PR) must be implemented
@@ -216,6 +220,7 @@ async fn connect_over(
     // run HTTP CONNECT / SOCKS5 handshake on `stream`
     // return wrapped stream
 }
+// Note: the TLS-wrap step from dial_tcp is SKIPPED in connect_over. The passed stream is already inside whatever encryption the relay chain provides; double-wrapping TLS would be incorrect.
 ```
 
 This enables using HTTP CONNECT or SOCKS5 as hops in a relay chain.
@@ -265,6 +270,7 @@ This enables using HTTP CONNECT or SOCKS5 as hops in a relay chain.
 - `socks5_user_pass_auth_succeeds` — negotiate method 0x02, auth success.
 - `socks5_no_acceptable_method_returns_error` — server returns 0xFF; assert
   `Err(NoAcceptableMethod)`. NOT retry. NOT fallback to no-auth.
+- `socks5_server_chooses_no_auth_despite_creds_configured` — advertise both [0x00, 0x02]; mock server picks 0x00; assert connection proceeds WITHOUT auth sub-negotiation (no [0x01, ulen, ...] sent). NOT Err(NoAcceptableMethod). Upstream: socks5.go::handshake; server may prefer no-auth even when offered user/pass.
 - `socks5_auth_failure_returns_proxy_auth_failed` — auth status ≠ 0x00.
 - `socks5_connect_failure_returns_socks5_connect_failed` — rep=0x02 (CONN_NOT_ALLOWED).
 - `socks5_domain_name_preferred_over_ip` — metadata has both host and dst_ip;

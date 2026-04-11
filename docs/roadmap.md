@@ -1,7 +1,7 @@
 # mihomo-rust Roadmap
 
 Owner: pm
-Last updated: 2026-04-11
+Last updated: 2026-04-11 (third-wave specs added)
 Source inputs: `docs/vision.md`, `docs/gap-analysis.md`, `docs/ci-status.md`.
 
 This roadmap translates the architect's gap analysis into an ordered work
@@ -86,12 +86,21 @@ YAML schema, struct shapes, error types, and per-layer tests.
 
 ### M1.B — Outbound protocols
 
+**VLESS is the primary modern outbound for M1.** VMess is dropped — see note below.
+
 | # | Item | Value | Risk | Spec | Owner |
 |---|------|:-----:|:----:|------|-------|
-| M1.B-1 | VMess outbound (AEAD, legacy MD5 auth behind feature flag) | H | H | [`docs/specs/proxy-vmess.md`](specs/proxy-vmess.md) *(draft)* | engineer |
+| ~~M1.B-1~~ | ~~VMess outbound~~ | — | — | [`docs/specs/proxy-vmess.md`](specs/proxy-vmess.md) *(dropped 2026-04-11 — preserved as design record)* | — |
 | M1.B-2 | VLESS outbound (plain, XTLS-vision optional) | H | H | [`docs/specs/proxy-vless.md`](specs/proxy-vless.md) *(draft)* | engineer |
-| M1.B-3 | HTTP CONNECT outbound | M | L | small — fold into a single spec with M1.B-4 | engineer |
-| M1.B-4 | SOCKS5 outbound | M | L | `docs/specs/proxy-http-socks-outbound.md` *(todo)* | engineer |
+| M1.B-3 | HTTP CONNECT outbound | M | L | [`docs/specs/proxy-http-socks-outbound.md`](specs/proxy-http-socks-outbound.md) *(draft)* | engineer |
+| M1.B-4 | SOCKS5 outbound | M | L | same spec, §SOCKS5 | engineer |
+
+**VMess drop rationale (2026-04-11):** most modern users have migrated to VLESS.
+VMess adds significant protocol complexity (AEAD KDF, auth-id replay cache, legacy
+cipher quirks, `vmess-legacy` feature flag) for diminishing returns. Dropped from
+M1 scope; spec preserved in `docs/specs/proxy-vmess.md` as a design record if
+revisited in a future milestone. VLESS's `connect_over` trait introduction now
+carries the weight M1.B-1 was planned to carry.
 
 **Deferred to M1.5 / M2** (architect recommendation, 2026-04-11):
 
@@ -114,12 +123,12 @@ YAML schema, struct shapes, error types, and per-layer tests.
 | # | Item | Value | Risk | Spec | Owner |
 |---|------|:-----:|:----:|------|-------|
 | M1.D-1 | Finish parser for already-enum'd rule types: `IN-PORT`, `DSCP`, `UID`, `SRC-GEOIP`, `PROCESS-PATH` | M | L | [`docs/specs/rules-parser-completion.md`](specs/rules-parser-completion.md) *(draft)* | engineer |
-| M1.D-2 | `GEOSITE` rule + geosite DB loader (**`mrs` only**, per architect 2026-04-11) | H | M | `docs/specs/rule-geosite.md` *(todo)* | engineer |
+| M1.D-2 | `GEOSITE` rule + geosite DB loader (**`mrs` only**, per architect 2026-04-11) | H | M | [`docs/specs/rule-geosite.md`](specs/rule-geosite.md) *(draft)* | engineer |
 | M1.D-3 | `IP-SUFFIX`, `IP-ASN` (requires ASN MMDB) | M | M | bundled into M1.D-1 spec | engineer |
-| M1.D-4 | `IN-TYPE`, `IN-NAME`, `IN-USER` (depends on named listeners — see M1.F) | M | M | defer until M1.F-1 | engineer |
-| M1.D-5 | Rule provider `inline` type, `mrs` binary format, periodic `interval` refresh | M | M | `docs/specs/rule-provider-upgrade.md` *(todo)* — supersedes M0-9 if taken together | engineer |
+| M1.D-4 | `IN-TYPE`, `IN-NAME`, `IN-USER` (depends on named listeners — see M1.F) | M | M | covered by M1.F-1 (IN-TYPE/IN-NAME) + M1.F-3 (IN-USER); no separate spec | engineer |
+| M1.D-5 | Rule provider `inline` type, `mrs` binary format, periodic `interval` refresh | M | M | [`docs/specs/rule-provider-upgrade.md`](specs/rule-provider-upgrade.md) *(draft)* — supersedes M0-9 | engineer |
 | M1.D-6 | `DOMAIN-WILDCARD` | L | L | bundled into M1.D-1 spec | engineer |
-| M1.D-7 | `SUB-RULE` (named rule subsets) | M | M | `docs/specs/sub-rules.md` *(todo)* | engineer |
+| M1.D-7 | `SUB-RULE` (named rule subsets) | M | M | [`docs/specs/sub-rules.md`](specs/sub-rules.md) *(draft)* | engineer |
 
 ### M1.E — DNS
 
@@ -127,18 +136,18 @@ YAML schema, struct shapes, error types, and per-layer tests.
 |---|------|:-----:|:----:|------|-------|
 | M1.E-1 | DoH and DoT upstream clients (hickory supports both) | H | M | [`docs/specs/dns-doh-dot.md`](specs/dns-doh-dot.md) *(draft)* | engineer |
 | M1.E-2 | `default-nameserver` (bootstrap) | H | L | bundled into M1.E-1 spec | engineer |
-| M1.E-3 | `nameserver-policy` (per-domain routing) | H | M | `docs/specs/dns-nameserver-policy.md` *(todo)* | engineer |
-| M1.E-4 | `fallback-filter` (GeoIP / IP-CIDR / domain gating) | M | M | bundle with M1.E-3 | engineer |
-| M1.E-5 | `hosts` + `use-system-hosts` | M | L | supersedes M0-5 if taken together | engineer |
+| M1.E-3 | `nameserver-policy` (per-domain routing) | H | M | [`docs/specs/dns-nameserver-policy.md`](specs/dns-nameserver-policy.md) *(draft)* | engineer |
+| M1.E-4 | `fallback-filter` (GeoIP / IP-CIDR / domain gating) | M | M | bundled into M1.E-3 spec | engineer |
+| M1.E-5 | `hosts` + `use-system-hosts` | M | L | [`docs/specs/dns-hosts.md`](specs/dns-hosts.md) *(draft)* — supersedes M0-5 | engineer |
 | M1.E-6 | DoQ upstream | L | M | defer to M2 unless a user asks | engineer |
 
 ### M1.F — Inbounds & sniffer
 
 | # | Item | Value | Risk | Spec | Owner |
 |---|------|:-----:|:----:|------|-------|
-| M1.F-1 | Generic `listeners:` named-listener config (prereq for IN-NAME / IN-TYPE) | M | M | `docs/specs/listeners-unified.md` *(todo)* | engineer |
+| M1.F-1 | Generic `listeners:` named-listener config (prereq for IN-NAME / IN-TYPE) | M | M | [`docs/specs/listeners-unified.md`](specs/listeners-unified.md) *(draft)* | engineer |
 | M1.F-2 | TLS SNI + HTTP Host sniffer (enables rule matching on port-only flows) | H | M | [`docs/specs/sniffer.md`](specs/sniffer.md) *(draft)* | engineer |
-| M1.F-3 | `authentication` + `skip-auth-prefixes` + LAN ACLs | M | L | `docs/specs/inbound-auth-acl.md` *(todo)* | engineer |
+| M1.F-3 | `authentication` + `skip-auth-prefixes` + LAN ACLs | M | L | [`docs/specs/inbound-auth-acl.md`](specs/inbound-auth-acl.md) *(draft)* | engineer |
 | M1.F-4 | Linux `redir` listener (SO_ORIGINAL_DST) | L | M | defer to M1.x or M2 | — |
 | M1.F-5 | Static `tunnel` listener (SS-style port→target) | L | L | defer | — |
 
@@ -150,25 +159,35 @@ YAML schema, struct shapes, error types, and per-layer tests.
 | M1.G-2 | `GET /proxies/:name/delay` and `GET /group/:name/delay` | H | L | [`docs/specs/api-delay-endpoints.md`](specs/api-delay-endpoints.md) *(draft)* | engineer |
 | M1.G-3 | `GET /logs` websocket stream | H | M | [`docs/specs/api-logs-websocket.md`](specs/api-logs-websocket.md) *(draft)* | engineer |
 | M1.G-4 | `GET /memory` websocket (runtime RSS stream) | M | L | bundled into M1.G-3 spec | engineer |
-| M1.G-5 | `GET/PUT /providers/rules[/:name]` | M | L | depends on M1.D-5 | engineer |
+| M1.G-5 | `GET/PUT /providers/rules[/:name]` | M | L | bundled into M1.D-5 spec | engineer |
 | M1.G-6 | `GET/PUT /providers/proxies[/:name]` + proxy providers impl | H | M | depends on M1.H-1 | engineer |
 | M1.G-7 | `DELETE /connections` (bulk) | L | L | bundled into M1.G-3 spec | engineer |
 | M1.G-8 | `GET /dns/query` (align with upstream; current is POST) | L | L | bundled into M1.G-3 spec | engineer |
 | M1.G-9 | `POST /cache/dns/flush` | L | L | bundled into M1.G-3 spec | engineer |
-| M1.G-10 | `PUT /configs` (reload from path/body) | M | M | `docs/specs/api-config-reload.md` *(todo)*; relates to M3 hot-reload | engineer |
+| M1.G-10 | `PUT /configs` (reload from path/body) | M | M | [`docs/specs/api-config-reload.md`](specs/api-config-reload.md) *(draft)*; M3 = hot-reload | engineer |
 
 ### M1.H — Providers & observability
 
 | # | Item | Value | Risk | Spec | Owner |
 |---|------|:-----:|:----:|------|-------|
 | M1.H-1 | `proxy-providers` (http/file, health-check, include-all) | H | M | [`docs/specs/proxy-providers.md`](specs/proxy-providers.md) *(draft)* | engineer |
-| M1.H-2 | Prometheus `/metrics` (traffic, conns, rule-match counters, proxy health) | H | L | `docs/specs/metrics-prometheus.md` *(todo)* | engineer |
+| M1.H-2 | Prometheus `/metrics` (traffic, conns, rule-match counters, proxy health) | H | L | [`docs/specs/metrics-prometheus.md`](specs/metrics-prometheus.md) *(draft)* | engineer |
 | M1.H-3 | Migration guide from Go mihomo (supported vs intentionally-not fields) | M | L | `docs/migration-from-go-mihomo.md` *(todo, PM)* | pm |
 
-### M1 exit criteria (from `vision.md`)
+### M1 exit criteria (revised 2026-04-11)
 
-A representative real-world Clash Meta subscription loads, routes traffic
-correctly, and survives a 24-hour soak test without leaks or panics.
+- All M1.A–H specs implemented and merged on main.
+- All M1 test plans pass under `cargo test` (lib + integration).
+- Workspace builds clean on Ubuntu + macOS CI (current).
+- Manual smoke test by the operator with one real Clash Meta subscription,
+  running ≥ 1 hour, routing observable real traffic without panics or
+  functional regressions.
+- CI green on main for at least the 24 hours preceding the release tag.
+
+**Rationale for revised criteria:** the "24h automated soak under synthetic
+load" (task #25) is dropped in favour of a short manual smoke under real
+protocol load. Real-protocol coverage is gained at near-zero tooling cost;
+slow-leak detection moves to M2 profiling if ever needed.
 
 ---
 
@@ -177,7 +196,8 @@ correctly, and survives a 24-hour soak test without leaks or panics.
 Scope frozen after M1 lands. Placeholder order (all items from `vision.md`
 §M2):
 
-1. Benchmark harness vs Go mihomo on identical hardware — `docs/benchmarks/`.
+1. `geodata:` YAML subsection (`mmdb-path`, `asn-path`, `geosite-path`, `auto-update`, `url.*`) — [`docs/specs/geodata-subsection.md`](specs/geodata-subsection.md) *(design sketch)*.
+2. Benchmark harness vs Go mihomo on identical hardware — `docs/benchmarks/`.
 2. Allocator audit of TCP relay and UDP NAT hot paths.
 3. Cargo feature flags for every optional protocol/transport; minimal-build
    size budget for `aarch64-musl` and `mipsel-musl`.

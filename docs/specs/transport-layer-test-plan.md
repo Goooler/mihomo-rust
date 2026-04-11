@@ -1,6 +1,6 @@
 # Test Plan: `mihomo-transport` crate (M1.A-1..4)
 
-Status: **draft** — owner: qa. Last updated: 2026-04-11.
+Status: **draft** — owner: qa. Last updated: 2026-04-11 (A8 reworded: SNI fallback in mihomo-config not TlsLayer; B8 split: layer trusts input, config-side clamp cases deferred to config_test.rs).
 Tracks: task #35. Companion to `docs/specs/transport-layer.md` and ADR-0001.
 
 This is the QA-owned acceptance test plan. The spec's §Test plan is PM's
@@ -103,7 +103,7 @@ producing a self-signed cert on demand.
 | A5 | `tls_alpn_fallback_http11` | Server offers `["http/1.1"]` only; client prefers `["h2","http/1.1"]`; assert negotiated ALPN == `http/1.1`. Guards against an "h2 or bust" bug. |
 | A6 | `tls_alpn_empty_config` | `alpn = []`; assert the ClientHello omits the ALPN extension entirely (not `alpn: [""]`). |
 | A7 | `tls_sni_override` | `sni = Some("cdn.example.com")`, dial address `127.0.0.1:port`; server captures `server_name`, assert it equals `cdn.example.com`. |
-| A8 | `tls_sni_fallback_to_host` | `sni = None`; dial to a host name (not IP); assert the SNI the server saw equals the dial host. |
+| A8 | `tls_sni_from_config_hostname` | `TlsConfig { sni: Some("hostname.example.com"), … }` (fallback already resolved in `mihomo-config` before layer construction — NOT in `TlsLayer`); assert the loopback server's captured `server_name` equals `"hostname.example.com"`. Guards against anyone adding SNI-fallback logic inside `TlsLayer` (upstream: `transport/gun/gun.go` keeps SNI resolution in proxy construction, NOT in the transport layer). |
 | A9 | `tls_sni_is_ip_omitted` | `sni = None`, dial to `127.0.0.1`; assert **no** SNI extension in the ClientHello (sending an IP as SNI is a protocol violation). |
 | A10 | `tls_client_cert_accepted` | Configure `ClientCert { cert_pem, key_pem }` with a test CA the server trusts; assert the loopback server observed the expected client-cert CN. |
 | A11 | `tls_fingerprint_warn_once_per_value` | Build two `TlsLayer`s with `fingerprint = Some("chrome")`; assert log capture shows **exactly one** `warn!` with the verbatim text from spec §"Fingerprint warn text" and substring `"chrome"`. |
@@ -123,7 +123,7 @@ Loopback server built on `tokio-tungstenite` in `tests/support/loopback.rs`.
 | B5 | `ws_path_forwarded` | Client path is `/custom/path?x=1`; assert the server saw the same path verbatim (no normalization). |
 | B6 | `ws_early_data_zero_no_protocol_header` | `max_early_data = 0`; write 100 bytes after the handshake; assert server received them as a **data frame**, not via `Sec-WebSocket-Protocol`. Locks the "0 disables entirely" default. |
 | B7 | `ws_early_data_encoded_in_protocol_header` | `max_early_data = 32`; write 16 bytes before the handshake completes; assert the server's received `Sec-WebSocket-Protocol` header is the base64url-no-padding encoding of those 16 bytes. |
-| B8 | `ws_early_data_capped_at_2048` | `WsConfig::new` with `max_early_data = 4096` constructed via mihomo-config's parser; assert it clamps to 2048 and emits one warn. (If the clamp actually lives in `mihomo-config` not `mihomo-transport`, this case belongs in `config_test.rs` — mark it there instead. See §Open questions.) |
+| B8 | `ws_early_data_layer_trusts_input` | `WsConfig { max_early_data: 4096, … }` passed directly to `WsLayer` (bypassing config); assert the layer produces a `Sec-WebSocket-Protocol` header of exactly 4096 bytes of early data — **NOT clamped to 2048 at the layer**. The clamp lives in `mihomo-config`, not here (NOT in `WsLayer`; upstream enforces at parse time, mihomo-rust mirrors that). Config-side clamp tests belong in `crates/mihomo-config/tests/config_test.rs`: (a) `ws_early_data_clamp_warn` — parse fixture with `max-early-data: 65535`; assert one `warn!` + `WsConfig { max_early_data: 2048 }`; (b) `ws_early_data_zero_passes_through` — parse `max-early-data: 0`; assert `WsConfig { max_early_data: 0 }` (default-off path, no warn). Add those to `config_test.rs` when `WsConfig` lands in `mihomo-config`. |
 | B9 | `ws_handshake_failure_surfaces_websocket_error` | Loopback server closes the TCP socket before completing the upgrade; assert `connect` returns `Err(TransportError::WebSocket(_))`. |
 
 ### C. `grpc` layer (`tests/grpc_test.rs`) — the anti-regression wall
@@ -245,12 +245,7 @@ it pass") are scope bugs.
 
 ## Open questions for engineer (none blocking)
 
-1. **`ws` early-data clamp location.** Spec §`ws` says the 2048 cap is
-   enforced in `mihomo-config` at parse time. My case B8 currently
-   lives in this plan, but if the clamp really lives in config, B8
-   belongs in `crates/mihomo-config/tests/config_test.rs` and this
-   plan just asserts the layer trusts its input. Tell me which side
-   you prefer and I'll rehome the case.
+1. ~~**`ws` early-data clamp location.**~~ **Resolved by architect**: clamp lives in `mihomo-config` at YAML parse time. B8 now asserts layer trusts input verbatim; config-side cases (`ws_early_data_clamp_warn`, `ws_early_data_zero_passes_through`) go in `config_test.rs` when `WsConfig` lands.
 2. **Loopback server hosting**. `tests/support/loopback.rs` will
    contain `TcpListener::bind` — that's the one case where the §F2
    grep-check needs a `tests/` whitelist. Make sure the grep walks

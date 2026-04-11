@@ -1,6 +1,11 @@
 # Test Plan: VMess outbound (M1.B-1)
 
-Status: **draft** — owner: qa. Last updated: 2026-04-11.
+> **Status: DROPPED** — VMess excluded from M1 scope by decision 2026-04-11.
+> Preserved as a design record in case VMess is revisited in a future milestone.
+> Do not implement against this test plan without a new product decision.
+> See `docs/specs/proxy-vmess.md` and `docs/roadmap.md` §M1.B for rationale.
+
+Status: **draft** — owner: qa. Last updated: 2026-04-11. *Superseded by drop decision above.*
 Tracks: task #39. Companion to `docs/specs/proxy-vmess.md`.
 
 This is the QA-owned acceptance test plan. The spec's `§Test plan` section

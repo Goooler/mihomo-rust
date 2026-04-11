@@ -1,6 +1,6 @@
 # Spec: Geodata YAML subsection (M2+)
 
-Status: Draft (design sketch — M1 uses file-discovery; this subsection lands in M2)
+Status: Approved (architect 2026-04-11, M2+ implementation)
 Owner: pm
 Tracks roadmap item: **M2** (task #47)
 Architect decision 2026-04-11: no `geodata:` YAML key in M1.
@@ -66,7 +66,7 @@ Field reference:
 | `asn-path` | string | — | Explicit path to ASN MMDB. Skips discovery chain. |
 | `geosite-path` | string | — | Explicit path to geosite `.mrs` file. Skips discovery chain. |
 | `auto-update` | bool | `false` | If true, background task checks for stale DBs and re-downloads. |
-| `auto-update-interval` | u32 | `24` | Hours between update checks. Minimum: 1. Maximum: 168 (7 days). |
+| `auto-update-interval` | u32 | `24` | Hours between update checks. Minimum: 1 (sub-hour polling hammers GitHub rate limits). No maximum. |
 | `url.mmdb` | string | *(default above)* | Download URL for Country.mmdb. |
 | `url.asn` | string | *(default above)* | Download URL for GeoLite2-ASN.mmdb. |
 | `url.geosite` | string | *(default above)* | Download URL for geosite.mrs. |
@@ -103,8 +103,18 @@ is a runtime error, not a parse-time error.
 Spawned once at startup when `auto-update: true`. Wakes every
 `auto-update-interval` hours, downloads each configured URL, writes
 to a temp file, and atomically replaces the live file via `rename(2)`.
-Hot-reload of the in-memory DB follows (the DB is wrapped in `Arc<RwLock<_>>`
-so readers continue with the old version until the write completes).
+
+**Important:** `rename(2)` updates the file on disk but NOT the in-memory DB.
+After each successful file swap, the task MUST explicitly reload the DB into
+memory by calling the appropriate loader and swapping the `Arc<RwLock<_>>`
+contents. Readers holding the old `Arc` guard continue to use the old in-memory
+DB until they complete their operation; new readers see the new DB after the
+swap. A file-only rename without the in-memory reload is a silent bug.
+
+Log the resolved download URL at INFO on each auto-update fire:
+`info!("auto-update: downloading {db} from {url}")`. Operators need to
+know whether they're using the baked-in default URLs (which point at
+third-party release artefacts with no SLA) vs an override.
 
 Download failure: log `warn!` and retry next interval. Do NOT abort
 the update task or panic.
@@ -115,7 +125,13 @@ the update task or panic.
 |---|------|:-----:|-----------|
 | 1 | `geodata-mode` / `geodata-loader` / `geoip-matcher` — present in upstream | B | Fields are silently ignored if present (forward-compat). Warn-once at parse time with names of ignored fields. |
 | 2 | Auto-update download failure — upstream logs and continues | — | We match: warn! and retry next interval. Not an error. |
-| 3 | Explicit path to absent file — upstream rejects at parse time | A | We accept at parse time; error at first use. Supports auto-update provisioning the file before first rule match. |
+
+**Design note — explicit path to absent file:** upstream Go mihomo rejects at parse time
+if an explicit path doesn't exist. We accept at parse time and error at first use.
+This is a deliberate accommodation for the auto-update flow: an operator can set
+`geosite-path` to a not-yet-downloaded file, set `auto-update: true`, and let the
+first update cycle download it before any GEOSITE rule fires. This is not a
+Class A or B divergence — it is a feature interaction, not a correctness trade-off.
 
 ## Acceptance criteria
 
@@ -140,13 +156,20 @@ the update task or panic.
 - [ ] Implement atomic file replace (`tempfile` + `rename`).
 - [ ] Warn-once on unrecognised `geodata.*` fields.
 
-## Open questions (for architect review)
+## Resolved questions (architect sign-off 2026-04-11)
 
-1. Should `mmdb-path`/`asn-path`/`geosite-path` be top-level (`geoip-db: ...`)
-   or nested under `geodata:` as sketched? Top-level matches upstream's scatter;
-   nested is cleaner for our config structure.
-2. Format of download URLs: should we use the MetaCubeX defaults above or
-   defer URL defaults to a later decision (user must provide `url.*` when
-   `auto-update: true`)?
-3. Should auto-update also update rule-set files referenced by `rule-providers`?
-   If yes, that spec (`rule-provider-upgrade.md`) should cross-reference this one.
+1. **Nested under `geodata:` (not top-level).** Upstream's top-level scatter
+   (`geoip-db:`, `geodata-mode:`) is a historical accident. Nested groups
+   path-overrides, URLs, and auto-update lifecycle concerns cleanly and avoids
+   a proliferation of `geo*` top-level keys. Users migrating from Go mihomo
+   are reading new docs in M2 anyway.
+
+2. **Bake default URLs in.** The 90% case is "trust MetaCubeX defaults, just
+   turn auto-update on." Users who need overrides can set `url.*` explicitly.
+   Document that defaults are best-effort (third-party artefacts, no SLA).
+   Log the resolved URL at INFO on each fire.
+
+3. **Do NOT fold rule-set updates into `geodata:`.** Rule-providers already have
+   their own `interval:` refresh mechanism; cadences differ (rule-providers = hours,
+   geodata = days). Keep them separate. `rule-provider-upgrade.md` notes:
+   "geodata auto-update is a separate mechanism; see geodata-subsection.md."
