@@ -793,7 +793,6 @@ async fn reorder_rules(
 struct DelayParams {
     url: Option<String>,
     timeout: Option<String>,
-    #[allow(dead_code)]
     expected: Option<String>,
 }
 
@@ -835,17 +834,21 @@ fn parse_delay_params(params: &DelayParams) -> Result<Duration, Box<Response>> {
 }
 
 /// Probe a single adapter and record the result into its health handle.
-/// Returns the measured delay (may be `0` on transport failure / timeout —
-/// caller decides how to surface that).
+/// On success records the measured delay; on any failure records `0` so
+/// the proxy's `last_delay` tracks the most recent outcome.
 async fn probe_and_record(
     proxy: &Arc<dyn mihomo_common::Proxy>,
     url: &str,
+    expected: Option<&str>,
     timeout: Duration,
-) -> u16 {
+) -> Result<u16, mihomo_proxy::health::UrlTestError> {
     let adapter: &dyn mihomo_common::ProxyAdapter = proxy.as_ref();
-    let delay = mihomo_proxy::health::url_test(adapter, url, timeout).await;
-    proxy.health().record_delay(delay);
-    delay
+    let result = mihomo_proxy::health::url_test(adapter, url, expected, timeout).await;
+    match &result {
+        Ok(d) => proxy.health().record_delay(*d),
+        Err(_) => proxy.health().record_delay(0),
+    }
+    result
 }
 
 async fn get_proxy_delay(
@@ -858,6 +861,7 @@ async fn get_proxy_delay(
         Err(resp) => return *resp,
     };
     let url = params.url.as_deref().unwrap_or("").to_string();
+    let expected = params.expected.clone();
 
     let proxies = state.tunnel.proxies();
     // upstream: hub/route/proxies.go::getProxyDelay — findProxyByName middleware
@@ -866,20 +870,18 @@ async fn get_proxy_delay(
     };
     drop(proxies);
 
-    let delay = probe_and_record(&proxy, &url, timeout).await;
-    if delay == 0 {
+    match probe_and_record(&proxy, &url, expected.as_deref(), timeout).await {
+        Ok(delay) => Json(DelayResp { delay }).into_response(),
+        // upstream: `render.Status(r, http.StatusGatewayTimeout)` → 504.
+        Err(mihomo_proxy::health::UrlTestError::Timeout) => {
+            msg_err(StatusCode::GATEWAY_TIMEOUT, "Timeout")
+        }
         // upstream: `newError("An error occurred in the delay test")` → 503.
-        // `url_test` collapses both "timeout elapsed" and "transport error"
-        // into delay == 0; we prefer the transport-error code (503) over the
-        // timeout code (504) here because distinguishing them would require
-        // threading the outcome through `url_test`. M1.G-2b (task #29) is the
-        // right place to split them when it upgrades the prober to a real GET.
-        return msg_err(
+        Err(mihomo_proxy::health::UrlTestError::Transport(_)) => msg_err(
             StatusCode::SERVICE_UNAVAILABLE,
             "An error occurred in the delay test",
-        );
+        ),
     }
-    Json(DelayResp { delay }).into_response()
 }
 
 async fn get_group_delay(
@@ -892,6 +894,7 @@ async fn get_group_delay(
         Err(resp) => return *resp,
     };
     let url = params.url.as_deref().unwrap_or("").to_string();
+    let expected = params.expected.clone();
 
     let proxies = state.tunnel.proxies();
     let Some(group) = proxies.get(&name).cloned() else {
@@ -911,11 +914,18 @@ async fn get_group_delay(
     drop(proxies);
 
     let url_shared = Arc::new(url);
+    let expected_shared = Arc::new(expected);
     let mut set: JoinSet<(String, u16)> = JoinSet::new();
     for (member_name, proxy) in members {
         let url = url_shared.clone();
+        let expected = expected_shared.clone();
         set.spawn(async move {
-            let delay = probe_and_record(&proxy, &url, timeout).await;
+            // Per-member errors collapse to 0 in the map — upstream uses the
+            // same sentinel for both timeout and transport-error inside the
+            // group result body.
+            let delay = probe_and_record(&proxy, &url, expected.as_deref(), timeout)
+                .await
+                .unwrap_or(0);
             (member_name, delay)
         });
     }

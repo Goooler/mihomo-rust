@@ -1308,12 +1308,15 @@ mod delay_support {
     use std::time::{Duration, Instant};
 
     #[derive(Clone, Debug)]
-    #[allow(dead_code)]
     pub enum DialBehavior {
         InstantOk,
         SleepThenOk(Duration),
         SleepThenError(Duration),
         ImmediateError,
+        /// Used by #29 tests: dial succeeds instantly but the canned HTTP
+        /// response returns the given status code. Exercises the
+        /// `expected`-param path and the status-line parsing path.
+        InstantStatus(u16, &'static str),
     }
 
     pub struct TestAdapter {
@@ -1340,20 +1343,46 @@ mod delay_support {
         }
     }
 
-    /// Sentinel stream used so we can return `Box<dyn ProxyConn>` without
-    /// actually opening a socket. `url_test` only needs the dial to succeed;
-    /// it does not read or write.
-    struct NopConn;
-    impl tokio::io::AsyncRead for NopConn {
+    /// Canned HTTP responder used so `url_test`'s real `GET` path exercises a
+    /// full write/read cycle without needing a kernel socket. Writes are
+    /// discarded; reads return a byte-at-a-time slice of the configured
+    /// response (default: `HTTP/1.1 204 No Content\r\n\r\n`). Override the
+    /// status via `CannedConn::with_status` to drive `expected`-param tests.
+    struct CannedConn {
+        response: Vec<u8>,
+        cursor: usize,
+    }
+    impl CannedConn {
+        fn ok() -> Self {
+            Self::with_status(204, "No Content")
+        }
+        fn with_status(code: u16, reason: &str) -> Self {
+            Self {
+                response: format!("HTTP/1.1 {code} {reason}\r\nContent-Length: 0\r\n\r\n")
+                    .into_bytes(),
+                cursor: 0,
+            }
+        }
+    }
+    impl tokio::io::AsyncRead for CannedConn {
         fn poll_read(
-            self: std::pin::Pin<&mut Self>,
+            mut self: std::pin::Pin<&mut Self>,
             _cx: &mut std::task::Context<'_>,
-            _buf: &mut tokio::io::ReadBuf<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
         ) -> std::task::Poll<std::io::Result<()>> {
+            let remaining = self.response.len() - self.cursor;
+            if remaining == 0 {
+                return std::task::Poll::Ready(Ok(()));
+            }
+            let n = remaining.min(buf.remaining());
+            let start = self.cursor;
+            let end = start + n;
+            buf.put_slice(&self.response[start..end]);
+            self.cursor += n;
             std::task::Poll::Ready(Ok(()))
         }
     }
-    impl tokio::io::AsyncWrite for NopConn {
+    impl tokio::io::AsyncWrite for CannedConn {
         fn poll_write(
             self: std::pin::Pin<&mut Self>,
             _cx: &mut std::task::Context<'_>,
@@ -1374,8 +1403,8 @@ mod delay_support {
             std::task::Poll::Ready(Ok(()))
         }
     }
-    impl Unpin for NopConn {}
-    impl ProxyConn for NopConn {}
+    impl Unpin for CannedConn {}
+    impl ProxyConn for CannedConn {}
 
     struct NopPacketConn;
     #[async_trait::async_trait]
@@ -1411,16 +1440,19 @@ mod delay_support {
         async fn dial_tcp(&self, _metadata: &Metadata) -> Result<Box<dyn ProxyConn>> {
             self.dial_starts.lock().unwrap().push(Instant::now());
             match &self.behavior {
-                DialBehavior::InstantOk => Ok(Box::new(NopConn)),
+                DialBehavior::InstantOk => Ok(Box::new(CannedConn::ok())),
                 DialBehavior::SleepThenOk(d) => {
                     tokio::time::sleep(*d).await;
-                    Ok(Box::new(NopConn))
+                    Ok(Box::new(CannedConn::ok()))
                 }
                 DialBehavior::SleepThenError(d) => {
                     tokio::time::sleep(*d).await;
                     Err(MihomoError::Proxy("test sleep-then-error".into()))
                 }
                 DialBehavior::ImmediateError => Err(MihomoError::Proxy("test immediate".into())),
+                DialBehavior::InstantStatus(code, reason) => {
+                    Ok(Box::new(CannedConn::with_status(*code, reason)))
+                }
             }
         }
         async fn dial_udp(&self, _metadata: &Metadata) -> Result<Box<dyn ProxyPacketConn>> {
@@ -1702,10 +1734,11 @@ async fn b6_immediate_error_is_503() {
 }
 
 #[tokio::test]
-async fn b7_dial_exceeds_timeout_is_503() {
-    // `url_test` wraps the dial in its own `tokio::time::timeout`, so a dial
-    // that never finishes collapses to delay == 0 and maps to 503. See note
-    // in `get_proxy_delay` — M1.G-2b will split this into a distinct 504.
+async fn b7_dial_exceeds_timeout_is_504() {
+    // Post-M1.G-2b: `url_test` now distinguishes `UrlTestError::Timeout` from
+    // transport errors, so a dial that overshoots the probe budget surfaces
+    // as 504 "Timeout" — matching upstream `hub/route/proxies.go::getProxyDelay`
+    // which renders `ErrRequestTimeout` → `http.StatusGatewayTimeout`.
     let adapter = TestAdapter::new(
         "T",
         DialBehavior::SleepThenOk(std::time::Duration::from_millis(500)),
@@ -1714,7 +1747,9 @@ async fn b7_dial_exceeds_timeout_is_503() {
     let state = state_with_proxies(vec![("T", adapter)]);
     let app = create_router(state);
     let resp = delay_req(app, format!("/proxies/T/delay?url={}&timeout=50", url_q())).await;
-    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&bytes[..], br#"{"message":"Timeout"}"#);
 }
 
 // ── D: group happy path ──────────────────────────────────────────────
@@ -2069,4 +2104,123 @@ async fn g3_get_proxy_delay_url_encoded_name() {
     )
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+// ── H: M1.G-2b (task #29) url_test HTTP-GET upgrade ──────────────────
+//
+// These cover the probe-quality half of M1.G-2. The test `CannedConn`
+// responds with a configurable HTTP/1.1 status line, so we can drive the
+// `expected`-param path and the "bad status → 503" contract without a
+// real socket. Upstream: `hub/route/proxies.go::getProxyDelay` + the
+// `httpHealthCheck` helper in `component/proxydialer/http.go`.
+
+#[tokio::test]
+async fn h1_default_expected_accepts_2xx() {
+    // No `expected` query param; response is 204 → success.
+    let adapter =
+        TestAdapter::new("T", DialBehavior::InstantStatus(204, "No Content")).into_proxy();
+    let state = state_with_proxies(vec![("T", adapter)]);
+    let app = create_router(state);
+    let resp = delay_req(
+        app,
+        format!("/proxies/T/delay?url={}&timeout=1000", url_q()),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn h2_default_expected_rejects_non_2xx() {
+    // 500 → default expected (2xx) misses → transport error → 503.
+    let adapter =
+        TestAdapter::new("T", DialBehavior::InstantStatus(500, "Server Error")).into_proxy();
+    let state = state_with_proxies(vec![("T", adapter)]);
+    let app = create_router(state);
+    let resp = delay_req(
+        app,
+        format!("/proxies/T/delay?url={}&timeout=1000", url_q()),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        &bytes[..],
+        br#"{"message":"An error occurred in the delay test"}"#
+    );
+}
+
+#[tokio::test]
+async fn h3_expected_range_accepts_member() {
+    // 301 is outside 2xx but within the explicit range the caller asked for.
+    let adapter = TestAdapter::new("T", DialBehavior::InstantStatus(301, "Moved")).into_proxy();
+    let state = state_with_proxies(vec![("T", adapter)]);
+    let app = create_router(state);
+    let resp = delay_req(
+        app,
+        format!(
+            "/proxies/T/delay?url={}&timeout=1000&expected=200,301-399",
+            url_q()
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn h4_expected_range_rejects_out_of_range() {
+    // 204 is inside 2xx but the caller restricted to 200 exactly.
+    let adapter =
+        TestAdapter::new("T", DialBehavior::InstantStatus(204, "No Content")).into_proxy();
+    let state = state_with_proxies(vec![("T", adapter)]);
+    let app = create_router(state);
+    let resp = delay_req(
+        app,
+        format!("/proxies/T/delay?url={}&timeout=1000&expected=200", url_q()),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn h5_group_member_bad_status_is_zero() {
+    // Group member whose HTTP response is 500 records as 0 in the map,
+    // alongside a successful member. Matches upstream group behaviour:
+    // per-member failures are map-zero, not a top-level error.
+    let good = TestAdapter::new("good", DialBehavior::InstantOk).into_proxy();
+    let bad = TestAdapter::new("bad", DialBehavior::InstantStatus(500, "Oops")).into_proxy();
+    let group = fallback_group("G", vec![good.clone(), bad.clone()]);
+    let state = state_with_proxies(vec![("good", good), ("bad", bad), ("G", group)]);
+    let app = create_router(state);
+    let resp = delay_req(app, format!("/group/G/delay?url={}&timeout=1000", url_q())).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["bad"], 0);
+    assert!(body["good"].as_u64().unwrap() >= 1);
+}
+
+#[tokio::test]
+async fn h6_sleep_then_transport_error_is_503() {
+    // Dial takes a real-but-bounded amount of time and then errors — tests
+    // that a transport failure which does NOT overshoot the probe budget
+    // still produces 503, not 504. Distinguishes the two error axes now
+    // that `url_test` classifies them separately (M1.G-2b contract).
+    let adapter = TestAdapter::new(
+        "T",
+        DialBehavior::SleepThenError(std::time::Duration::from_millis(20)),
+    )
+    .into_proxy();
+    let state = state_with_proxies(vec![("T", adapter)]);
+    let app = create_router(state);
+    let resp = delay_req(
+        app,
+        format!("/proxies/T/delay?url={}&timeout=1000", url_q()),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        &bytes[..],
+        br#"{"message":"An error occurred in the delay test"}"#
+    );
 }
