@@ -315,11 +315,19 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let info = find_process(Network::Tcp, addr)
             .expect("process lookup should locate the current test process");
-        assert!(!info.name.is_empty(), "process name should be populated");
-        // On both Linux and macOS the test binary name contains "process_lookup"
-        // or the cargo test runner harness. Don't pin the exact string; just
-        // assert it's non-empty and the uid is set.
         assert!(info.uid.is_some(), "uid should be populated");
+        // Exact-match guard-rail: the returned name must equal the full test
+        // binary filename. On Linux this catches `/proc/<pid>/comm` truncation
+        // (TASK_COMM_LEN=16 → 15-char cap) which mangles `<crate>-<16hex>`
+        // cargo-test harness names — the bug fixed by 65f19e5.
+        let expected = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
+            .expect("current_exe should be readable in tests");
+        assert_eq!(
+            info.name, expected,
+            "process name must not be truncated"
+        );
     }
 
     #[test]
