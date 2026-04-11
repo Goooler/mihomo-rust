@@ -1516,9 +1516,52 @@ mod delay_support {
     pub fn fallback_group(name: &str, members: Vec<Arc<dyn Proxy>>) -> Arc<dyn Proxy> {
         Arc::new(mihomo_proxy::FallbackGroup::new(name, members))
     }
+
+    /// Build a url-test group. Used by E5 to verify the delay probe does not
+    /// trigger reselection.
+    pub fn url_test_group(name: &str, members: Vec<Arc<dyn Proxy>>) -> Arc<dyn Proxy> {
+        Arc::new(mihomo_proxy::UrlTestGroup::new(name, members, 150))
+    }
+
+    /// Same as `state_with_proxies` but configures the auth middleware with a
+    /// bearer secret so the delay endpoints can be exercised under the gated
+    /// subrouter.
+    pub fn state_with_proxies_and_secret(
+        named: Vec<(&str, Arc<dyn Proxy>)>,
+        secret: &str,
+    ) -> Arc<super::AppState> {
+        use super::*;
+        let mut proxies = std::collections::HashMap::new();
+        for (name, proxy) in named {
+            proxies.insert(name.to_string(), proxy);
+        }
+
+        let resolver = Arc::new(Resolver::new(
+            vec!["8.8.8.8:53".parse().unwrap()],
+            vec![],
+            DnsMode::Normal,
+            DomainTrie::new(),
+        ));
+        let tunnel = Tunnel::new(resolver);
+        tunnel.update_proxies(proxies);
+
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.yaml").to_str().unwrap().to_string();
+        std::mem::forget(dir);
+
+        Arc::new(AppState {
+            tunnel,
+            secret: Some(secret.to_string()),
+            config_path,
+            raw_config: Arc::new(RwLock::new(test_raw_config())),
+        })
+    }
 }
 
-use delay_support::{fallback_group, state_with_proxies, DialBehavior, TestAdapter};
+use delay_support::{
+    fallback_group, state_with_proxies, state_with_proxies_and_secret, url_test_group,
+    DialBehavior, TestAdapter,
+};
 
 fn url_q() -> &'static str {
     "http://www.gstatic.com/generate_204"
@@ -1772,4 +1815,258 @@ async fn d5_group_delay_records_into_each_member_history() {
     let _ = delay_req(app, format!("/group/G/delay?url={}&timeout=1000", url_q())).await;
     assert_eq!(a.delay_history().len(), 1);
     assert_eq!(b.delay_history().len(), 1);
+}
+
+// ── C: auth gating on the two new endpoints ──────────────────────────
+//
+// Delay endpoints live under the gated `api` subrouter; these cases lock
+// that wiring in so a future refactor can't accidentally expose them.
+
+#[tokio::test]
+async fn c1_get_proxy_delay_missing_auth_401() {
+    let adapter = TestAdapter::new("T", DialBehavior::InstantOk).into_proxy();
+    let state = state_with_proxies_and_secret(vec![("T", adapter)], "hunter2");
+    let app = create_router(state);
+    let resp = delay_req(
+        app,
+        format!("/proxies/T/delay?url={}&timeout=1000", url_q()),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn c2_get_proxy_delay_wrong_auth_401() {
+    let adapter = TestAdapter::new("T", DialBehavior::InstantOk).into_proxy();
+    let state = state_with_proxies_and_secret(vec![("T", adapter)], "hunter2");
+    let app = create_router(state);
+    let resp = app
+        .oneshot(
+            Request::get(format!("/proxies/T/delay?url={}&timeout=1000", url_q()))
+                .header("authorization", "Bearer wrong")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn c3_get_proxy_delay_correct_auth_200() {
+    let adapter = TestAdapter::new(
+        "T",
+        DialBehavior::SleepThenOk(std::time::Duration::from_millis(5)),
+    )
+    .into_proxy();
+    let state = state_with_proxies_and_secret(vec![("T", adapter)], "hunter2");
+    let app = create_router(state);
+    let resp = app
+        .oneshot(
+            Request::get(format!("/proxies/T/delay?url={}&timeout=1000", url_q()))
+                .header("authorization", "Bearer hunter2")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn c4_get_group_delay_missing_auth_401() {
+    let a = TestAdapter::new("A", DialBehavior::InstantOk).into_proxy();
+    let group = fallback_group("G", vec![a.clone()]);
+    let state = state_with_proxies_and_secret(vec![("A", a), ("G", group)], "hunter2");
+    let app = create_router(state);
+    let resp = delay_req(app, format!("/group/G/delay?url={}&timeout=1000", url_q())).await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+// ── E: group endpoint — concurrency and timeout semantics ────────────
+//
+// Divergence note vs docs/specs/api-delay-endpoints-test-plan.md:
+// - E3 (one slow member → partial map with 0 for slow) is **not**
+//   implementable without contradicting the spec. Spec §Error cases row
+//   3 and §"Timeout semantics — group-wide" both say: any single slow
+//   member pushes the entire group probe past the deadline and the
+//   endpoint returns 504. There is no "partial results" mode. This is
+//   the upstream mihomo contract (see hub/route/groups.go::getGroupDelay
+//   — single context.WithTimeout around the whole URLTest call). QA
+//   plan's E3 wording pre-dates the final spec lock; skipping it is the
+//   correct choice here — covered instead by d4 (all-slow → 504).
+// - E4 is a duplicate of d4; not re-added.
+// Class A divergence per ADR-0002 (silent-misroute avoidance): the
+// group-wide-timeout semantic must be preserved byte-exactly so dashboards
+// relying on upstream's error shape don't quietly show stale zeros.
+//
+// Memory note on timing: tokio::time::pause() virtualises tokio::sleep
+// and tokio::time::timeout, but `url_test` uses std::time::Instant which
+// is real wall time. Using pause() would collapse measured delays to ~0
+// regardless of adapter behaviour. So these tests use real wall time with
+// generous slack per feedback_tokio_pause_syscalls.md.
+
+#[tokio::test]
+async fn e1_group_delay_dials_all_members_concurrently() {
+    // 5 members, each sleeps 100ms. If dispatched in parallel the 5 dial
+    // starts must cluster within a narrow window; serial dispatch would
+    // space them ~100ms apart.
+    let mut starts_vec = Vec::new();
+    let mut members: Vec<Arc<dyn mihomo_common::Proxy>> = Vec::new();
+    let mut named: Vec<(&'static str, Arc<dyn mihomo_common::Proxy>)> = Vec::new();
+    let names = ["A", "B", "C", "D", "E"];
+    for n in names {
+        let adapter = TestAdapter::new(
+            n,
+            DialBehavior::SleepThenOk(std::time::Duration::from_millis(100)),
+        );
+        let starts = adapter.dial_starts.clone();
+        starts_vec.push(starts);
+        let p = adapter.into_proxy();
+        members.push(p.clone());
+        named.push((n, p));
+    }
+    let group = fallback_group("G", members);
+    named.push(("G", group));
+    let state = state_with_proxies(named);
+    let app = create_router(state);
+    let resp = delay_req(app, format!("/group/G/delay?url={}&timeout=1000", url_q())).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let mut first_starts: Vec<std::time::Instant> = starts_vec
+        .iter()
+        .map(|s| *s.lock().unwrap().first().expect("each member dialed once"))
+        .collect();
+    first_starts.sort();
+    let spread = first_starts
+        .last()
+        .unwrap()
+        .duration_since(*first_starts.first().unwrap());
+    // 50ms slack is comfortably under the 100ms per-member sleep floor that
+    // serial dispatch would produce, and well above any realistic scheduler
+    // jitter on CI.
+    assert!(
+        spread < std::time::Duration::from_millis(50),
+        "dial starts should be concurrent, spread was {:?}",
+        spread
+    );
+}
+
+#[tokio::test]
+async fn e2_group_delay_total_walltime_bounded_by_timeout() {
+    // 3 instant-ok members with a generous budget; total wall time should
+    // be well under 100ms. Guards against accidental serial dispatch (which
+    // would still be fast here, but guards the floor).
+    let a = TestAdapter::new("A", DialBehavior::InstantOk).into_proxy();
+    let b = TestAdapter::new("B", DialBehavior::InstantOk).into_proxy();
+    let c = TestAdapter::new("C", DialBehavior::InstantOk).into_proxy();
+    let group = fallback_group("G", vec![a.clone(), b.clone(), c.clone()]);
+    let state = state_with_proxies(vec![("A", a), ("B", b), ("C", c), ("G", group)]);
+    let app = create_router(state);
+    let start = std::time::Instant::now();
+    let resp = delay_req(app, format!("/group/G/delay?url={}&timeout=1000", url_q())).await;
+    let elapsed = start.elapsed();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(
+        elapsed < std::time::Duration::from_millis(200),
+        "group probe with 3 instant members should finish fast, took {:?}",
+        elapsed
+    );
+}
+
+#[tokio::test]
+async fn e5_group_delay_url_test_no_reselection() {
+    // UrlTestGroup::current() is driven by update_fastest(), which is
+    // called only from its own dial_tcp — not from the delay endpoint
+    // (which walks members directly). Probing the group must NOT change
+    // `current`, even if a later member would win a reselection. Locks in
+    // the spec's "records, does not reselect" contract.
+    // upstream: hub/route/proxies.go::getGroupDelay — it calls
+    // group.URLTest which writes history but does not flip `selected`.
+    let a = TestAdapter::new(
+        "A",
+        DialBehavior::SleepThenOk(std::time::Duration::from_millis(50)),
+    )
+    .into_proxy();
+    let b = TestAdapter::new(
+        "B",
+        DialBehavior::SleepThenOk(std::time::Duration::from_millis(5)),
+    )
+    .into_proxy();
+    let group = url_test_group("G", vec![a.clone(), b.clone()]);
+    assert_eq!(group.current().as_deref(), Some("A"));
+    let state = state_with_proxies(vec![("A", a), ("B", b), ("G", group.clone())]);
+    let app = create_router(state);
+    let resp = delay_req(app, format!("/group/G/delay?url={}&timeout=1000", url_q())).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        group.current().as_deref(),
+        Some("A"),
+        "delay probe must not trigger UrlTestGroup reselection"
+    );
+}
+
+// ── G: routing and mounting ──────────────────────────────────────────
+
+#[tokio::test]
+async fn g1_get_proxy_delay_route_is_under_proxies_tree() {
+    // Regression guard: the handler must be reachable at /proxies/:name/delay,
+    // NOT under /api/proxies/... (which was the wrong tree in an early draft).
+    let adapter = TestAdapter::new(
+        "T",
+        DialBehavior::SleepThenOk(std::time::Duration::from_millis(5)),
+    )
+    .into_proxy();
+    let state = state_with_proxies(vec![("T", adapter)]);
+    let app = create_router(state);
+    let resp = delay_req(
+        app,
+        format!("/proxies/T/delay?url={}&timeout=1000", url_q()),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK, "correct tree must 200");
+}
+
+#[tokio::test]
+async fn g2_get_group_delay_route_is_singular_group_not_groups() {
+    // Upstream mihomo uses singular `/group/:name/delay`, NOT `/groups/...`.
+    // Dashboards expect this exact path — matching it byte-for-byte is the
+    // whole point of this feature.
+    let a = TestAdapter::new(
+        "A",
+        DialBehavior::SleepThenOk(std::time::Duration::from_millis(5)),
+    )
+    .into_proxy();
+    let group = fallback_group("G", vec![a.clone()]);
+    let state = state_with_proxies(vec![("A", a), ("G", group)]);
+    let app = create_router(state);
+    // Singular form reaches the handler.
+    let resp_ok = delay_req(
+        app.clone(),
+        format!("/group/G/delay?url={}&timeout=1000", url_q()),
+    )
+    .await;
+    assert_eq!(resp_ok.status(), StatusCode::OK);
+    // Plural form must 404 (route not mounted).
+    let resp_miss = delay_req(app, format!("/groups/G/delay?url={}&timeout=1000", url_q())).await;
+    assert_eq!(resp_miss.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn g3_get_proxy_delay_url_encoded_name() {
+    // Axum path decodes %20 → space before matching. Proxy name with a space
+    // must round-trip.
+    let adapter = TestAdapter::new(
+        "my proxy",
+        DialBehavior::SleepThenOk(std::time::Duration::from_millis(5)),
+    )
+    .into_proxy();
+    let state = state_with_proxies(vec![("my proxy", adapter)]);
+    let app = create_router(state);
+    let resp = delay_req(
+        app,
+        format!("/proxies/my%20proxy/delay?url={}&timeout=1000", url_q()),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
 }
