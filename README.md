@@ -7,13 +7,23 @@ A high-performance Rust implementation of the [mihomo](https://github.com/MetaCu
 ### Proxy Protocols
 - **Shadowsocks** -- TCP and UDP relay, AEAD and stream ciphers (aes-256-gcm, chacha20-ietf-poly1305, etc.)
 - **Trojan** -- TLS 1.2/1.3 via rustls, SNI, optional skip-cert-verify
+- **VLESS** -- Plain VLESS and XTLS-Vision splice; TLS, WebSocket, gRPC, H2, HTTPUpgrade transports
+- **HTTP** -- HTTP CONNECT outbound proxy with optional TLS and basic auth
+- **SOCKS5** -- SOCKS5 outbound proxy with optional TLS and auth
 - **Direct** -- Direct connection to destination
 - **Reject** -- Drop connections (with configurable behavior)
+
+### TLS & Privacy
+- **ECH (Encrypted Client Hello)** -- DNS-based ECH config fetching from HTTPS/SVCB records; BoringSSL backend (`boring-tls` feature)
+- **uTLS Fingerprinting** -- Chrome, Firefox, Safari, iOS, Android, Edge profiles to bypass TLS fingerprint detection
+- **rustls** default backend with optional BoringSSL for advanced features
 
 ### Proxy Groups
 - **Selector** -- Manual proxy selection via REST API or web UI
 - **URLTest** -- Automatic selection based on latency with tolerance threshold
 - **Fallback** -- Automatic failover to first alive proxy
+- **LoadBalance** -- Round-robin or consistent-hashing distribution
+- **Relay** -- Chained proxy tunneling through multiple hops
 
 ### Rule Engine
 | Rule | Example | Description |
@@ -28,7 +38,12 @@ A high-performance Rust implementation of the [mihomo](https://github.com/MetaCu
 | SRC-PORT | `SRC-PORT,1234,DIRECT` | Source port(s) |
 | NETWORK | `NETWORK,udp,Proxy` | TCP or UDP |
 | PROCESS-NAME | `PROCESS-NAME,curl,DIRECT` | Process name |
+| PROCESS-PATH | `PROCESS-PATH,/usr/bin/curl,DIRECT` | Process path |
 | GEOIP | `GEOIP,CN,DIRECT,no-resolve` | MaxMind GeoIP lookup |
+| SRC-GEOIP | `SRC-GEOIP,CN,DIRECT` | Source GeoIP lookup |
+| DSCP | `DSCP,46,Proxy` | IP DSCP field |
+| IN-PORT | `IN-PORT,7890,Proxy` | Inbound listener port |
+| UID | `UID,1000,DIRECT` | Process UID (Linux) |
 | MATCH | `MATCH,Proxy` | Catch-all fallback |
 
 Logic composition rules (AND, OR, NOT) are also supported for combining conditions.
@@ -115,12 +130,13 @@ Listeners (HTTP/SOCKS5/Mixed/TProxy)
   REST API Server (Axum)   --->  Runtime control + Web UI
 ```
 
-10 workspace crates with clear separation of concerns:
+11 workspace crates with clear separation of concerns:
 
 | Crate | Purpose |
 |-------|---------|
 | `mihomo-common` | Core traits and types (ProxyAdapter, Rule, Metadata) |
 | `mihomo-trie` | Domain trie for efficient pattern matching |
+| `mihomo-transport` | TLS (rustls + BoringSSL), WebSocket, gRPC, H2, HTTPUpgrade layers |
 | `mihomo-proxy` | Proxy protocol implementations and groups |
 | `mihomo-rules` | Rule matching engine and parser |
 | `mihomo-dns` | DNS resolver, cache, DNS snooping, server |

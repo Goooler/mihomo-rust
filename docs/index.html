@@ -113,7 +113,7 @@ footer a { color: var(--accent); }
     <div class="grid">
       <div class="card">
         <h3><span class="icon">&#x1F310;</span> Proxy Protocols</h3>
-        <p>Shadowsocks (AEAD + stream ciphers), Trojan (TLS 1.2/1.3 via rustls), Direct, and Reject adapters with TCP and UDP relay.</p>
+        <p>Shadowsocks, Trojan, VLESS (XTLS-Vision), HTTP, SOCKS5 outbound adapters with TCP/UDP relay. WebSocket, gRPC, H2, HTTPUpgrade transports.</p>
       </div>
       <div class="card">
         <h3><span class="icon">&#x1F4CB;</span> Rule Engine</h3>
@@ -137,11 +137,15 @@ footer a { color: var(--accent); }
       </div>
       <div class="card">
         <h3><span class="icon">&#x2699;</span> Proxy Groups</h3>
-        <p>Selector (manual), URL-Test (latency-based auto), and Fallback (failover) groups with multi-pass dependency resolution.</p>
+        <p>Selector, URL-Test, Fallback, LoadBalance (round-robin / consistent-hashing), and Relay (chained hops) with multi-pass dependency resolution.</p>
       </div>
       <div class="card">
         <h3><span class="icon">&#x1F4E6;</span> Easy Deployment</h3>
         <p>Single static binary. Install as a systemd service with one command. Pre-built binaries for Linux amd64/arm64, macOS arm64, and Windows amd64.</p>
+      </div>
+      <div class="card">
+        <h3><span class="icon">&#x1F512;</span> ECH &amp; uTLS</h3>
+        <p>Encrypted Client Hello via BoringSSL. uTLS fingerprint spoofing (Chrome, Firefox, Safari, iOS, Android, Edge). DNS-based ECH config from HTTPS/SVCB records.</p>
       </div>
       <div class="card">
         <h3><span class="icon">&#x1F680;</span> Performance</h3>
@@ -188,6 +192,7 @@ footer a { color: var(--accent); }
       <tbody>
         <tr><td>mihomo-common</td><td>Core traits and types (ProxyAdapter, Rule, Metadata)</td></tr>
         <tr><td>mihomo-trie</td><td>Domain trie for efficient pattern matching</td></tr>
+        <tr><td>mihomo-transport</td><td>TLS (rustls + BoringSSL), WebSocket, gRPC, H2, HTTPUpgrade</td></tr>
         <tr><td>mihomo-proxy</td><td>Proxy protocol implementations and groups</td></tr>
         <tr><td>mihomo-rules</td><td>Rule matching engine and parser</td></tr>
         <tr><td>mihomo-dns</td><td>DNS resolver, cache, DNS snooping, server</td></tr>
